@@ -1,0 +1,14 @@
+# Dependencias
+node_modules/
+
+# Build
+dist/
+
+# Secretos — repo público: no subir credenciales
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
