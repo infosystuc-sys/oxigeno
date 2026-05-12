@@ -1,18 +1,24 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  Box, Paper, Typography, IconButton, Container,
+  Box, Paper, Typography, IconButton, Container, Button,
   CircularProgress, Alert, Chip, Snackbar, Select, MenuItem, Tooltip,
+  Dialog, DialogTitle, DialogContent, DialogActions, AlertTitle,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import PostAddIcon from '@mui/icons-material/PostAdd';
+import PaymentIcon from '@mui/icons-material/Payment';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { DataGrid } from '@mui/x-data-grid';
 import {
   getTransfers, getDestinos, updateTransfer, deleteTransfer, sanitizeTransferWritePayload,
 } from '../hooks/useTransferAPI';
 import EditarTransferenciaModal from '../components/EditarTransferenciaModal';
 import AsignarCuentaProveedorDialog from '../components/AsignarCuentaProveedorDialog';
+import DocumentoPreviewDialog from '../components/DocumentoPreviewDialog';
 import { formatMontoConSimbolo } from '../utils/moneyFormat';
 
 // ─── Celda con Select inline ─────────────────────────────────────────────────
@@ -94,6 +100,15 @@ const Dashboard = () => {
   const [modalAbierto,           setModalAbierto]           = useState(false);
   const [asignarCuentaOpen,      setAsignarCuentaOpen]      = useState(false);
   const [transferenciaAsignar,  setTransferenciaAsignar]    = useState(null);
+  const [documentoPreview, setDocumentoPreview] = useState({
+    open: false,
+    previewUrl: '',
+    tipo: 'recibo',
+    transferenciaId: null,
+    modo: 'visualizar',
+  });
+  const [generandoRecibo, setGenerandoRecibo] = useState(false);
+  const [confirmGenerar, setConfirmGenerar] = useState({ open: false, transferencia: null });
 
   // Ref para leer el estado actual dentro de callbacks memoizados
   const rowsRef = useRef(rows);
@@ -108,7 +123,13 @@ const Dashboard = () => {
         getTransfers(),
         getDestinos({ activo: 'true', pageSize: 500 }),
       ]);
-      setRows(txRes.transfers   || []);
+      setRows(
+        (txRes.transfers || []).map((row) => ({
+          ...row,
+          REC_EMITIDO: row.REC_EMITIDO ?? null,
+          OP_EMITIDA: row.OP_EMITIDA ?? null,
+        }))
+      );
       setDestinos(destRes.items || []);
     } catch {
       setApiError('Sin conexión con la BD.');
@@ -168,6 +189,98 @@ const Dashboard = () => {
   const handleTransferenciaActualizada = useCallback((actualizado) => {
     setRows((prev) => prev.map((r) => (r.id === actualizado.id ? { ...r, ...actualizado } : r)));
     setSnack({ open: true, msg: 'Transferencia actualizada correctamente', severity: 'success' });
+  }, []);
+
+  const handleCerrarDocumentoPreview = useCallback(() => {
+    setDocumentoPreview({
+      open: false,
+      previewUrl: '',
+      tipo: 'recibo',
+      transferenciaId: null,
+      modo: 'visualizar',
+    });
+  }, []);
+
+  const handleVisualizarRecibo = useCallback((row) => {
+    setDocumentoPreview({
+      open: true,
+      previewUrl: `/api/transfers/${row.id}/visualizar-recibo`,
+      tipo: 'recibo',
+      transferenciaId: row.id,
+      modo: 'visualizar',
+    });
+  }, []);
+
+  const handleGenerarReciboClick = useCallback((row) => {
+    setConfirmGenerar({ open: true, transferencia: row });
+  }, []);
+
+  const handleConfirmGenerar = useCallback(async () => {
+    const transferencia = confirmGenerar.transferencia;
+    if (!transferencia) return;
+    setConfirmGenerar({ open: false, transferencia: null });
+    setGenerandoRecibo(true);
+
+    try {
+      const response = await fetch(
+        `/api/transfers/${transferencia.id}/generar-recibo`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' } }
+      );
+
+      const data = await response.json();
+
+      // HTTP 409: recibo ya emitido
+      if (response.status === 409) {
+        alert('⚠️ Este recibo ya fue generado anteriormente.\n\nUse el botón "Visualizar" para verlo.');
+        return;
+      }
+
+      // Cualquier otro error
+      if (!response.ok) {
+        throw new Error(data.error || 'Error al generar recibo');
+      }
+
+      // Éxito: actualizar la fila en el grid localmente
+      setRows((prev) =>
+        prev.map((t) =>
+          t.id === transferencia.id
+            ? { ...t, REC_EMITIDO: 'S' }
+            : t
+        )
+      );
+
+      // Mensaje diferenciado según si se insertó en GVA12 o no
+      const mensajeGVA12 = data['insertó_gva12']
+        ? `ID Tango GVA12: ${data.id_gva12}`
+        : 'Origen no comercial — GVA12 no aplica';
+
+      alert(`✅ Recibo generado correctamente\n\nN° Comprobante: ${data.n_comp}\n${mensajeGVA12}`);
+
+      // Abrir preview
+      setDocumentoPreview({
+        open: true,
+        previewUrl: `/api/transfers/${transferencia.id}/visualizar-recibo`,
+        tipo: 'recibo',
+        transferenciaId: transferencia.id,
+        modo: 'generado',
+      });
+    } catch (err) {
+      console.error('Error al generar recibo:', err);
+      alert(`❌ Error al generar recibo: ${err.message}`);
+    } finally {
+      setGenerandoRecibo(false);
+    }
+  }, [confirmGenerar.transferencia]);
+
+  const handleAbrirComprobantePago = useCallback((row) => {
+    if (String(row.Estado || '').trim() !== 'Utilizada') return;
+    setDocumentoPreview({
+      open: true,
+      previewUrl: `/api/transfers/${row.id}/generar-comprobante-pago`,
+      tipo: 'pago',
+      transferenciaId: row.id,
+      modo: 'visualizar',
+    });
   }, []);
 
   const handleEliminarTransferencia = useCallback(async (row) => {
@@ -491,7 +604,7 @@ const Dashboard = () => {
     {
       field: 'acciones',
       headerName: 'Acciones',
-      width: 120,
+      width: 240,
       sortable: false,
       renderCell: (p) => (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, height: '100%' }}>
@@ -507,6 +620,53 @@ const Dashboard = () => {
               <EditIcon fontSize="small" />
             </IconButton>
           </Tooltip>
+          <Tooltip title="Visualizar recibo (sin registrar en Tango)">
+            <IconButton
+              size="small"
+              color="info"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleVisualizarRecibo(p.row);
+              }}
+            >
+              <VisibilityIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          {/* Botón GENERAR Recibo */}
+          <Tooltip title={
+            p.row.REC_EMITIDO === 'S'
+              ? 'Recibo ya generado — usar Visualizar para ver'
+              : 'Generar recibo y registrar en Tango'
+          }
+          >
+            <span>
+              <IconButton
+                size="small"
+                color={p.row.REC_EMITIDO === 'S' ? 'default' : 'primary'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleGenerarReciboClick(p.row);
+                }}
+                disabled={generandoRecibo || p.row.REC_EMITIDO === 'S'}
+              >
+                <PostAddIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          {String(p.row.Estado || '').trim() === 'Utilizada' ? (
+            <Tooltip title="Comprobante de pago">
+              <IconButton
+                size="small"
+                color="success"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleAbrirComprobantePago(p.row);
+                }}
+              >
+                <PaymentIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          ) : null}
           <Tooltip title="Eliminar transferencia">
             <IconButton
               size="small"
@@ -522,7 +682,16 @@ const Dashboard = () => {
         </Box>
       ),
     },
-  ], [handleSave, destSelectOptionsForOrigen, handleAbrirModal, handleEliminarTransferencia]);
+  ], [
+    handleSave,
+    destSelectOptionsForOrigen,
+    handleAbrirModal,
+    handleEliminarTransferencia,
+    handleVisualizarRecibo,
+    handleGenerarReciboClick,
+    handleAbrirComprobantePago,
+    generandoRecibo,
+  ]);
 
   return (
     <Container maxWidth={false} sx={{ mt: 2, mb: 3, px: { xs: 1, sm: 2 } }}>
@@ -593,6 +762,68 @@ const Dashboard = () => {
           {snack.msg}
         </Alert>
       </Snackbar>
+
+      <DocumentoPreviewDialog
+        open={documentoPreview.open}
+        onClose={handleCerrarDocumentoPreview}
+        previewUrl={documentoPreview.previewUrl}
+        tipo={documentoPreview.tipo}
+        transferenciaId={documentoPreview.transferenciaId}
+        modo={documentoPreview.modo}
+      />
+
+      {/* Diálogo de confirmación — Generar Recibo en Tango */}
+      <Dialog
+        open={confirmGenerar.open}
+        onClose={() => setConfirmGenerar({ open: false, transferencia: null })}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <WarningAmberIcon color="warning" />
+          Generar Recibo en Tango
+        </DialogTitle>
+        <DialogContent>
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            <AlertTitle>Atenci&oacute;n</AlertTitle>
+            Esta acci&oacute;n crear&aacute; un registro en la tabla GVA12 de Tango.
+            No se puede deshacer.
+          </Alert>
+          {confirmGenerar.transferencia && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+              <Typography variant="body2">
+                <strong>C&oacute;digo:</strong> {confirmGenerar.transferencia.CodigoTransferencia}
+              </Typography>
+              <Typography variant="body2">
+                <strong>Cliente:</strong> {confirmGenerar.transferencia.Cliente}
+              </Typography>
+              <Typography variant="body2">
+                <strong>C&oacute;d. Cliente:</strong> {confirmGenerar.transferencia.COD_CLIENT || '—'}
+              </Typography>
+              <Typography variant="body2">
+                <strong>Monto:</strong> {formatMontoConSimbolo(confirmGenerar.transferencia.Monto)}
+              </Typography>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button
+            onClick={() => setConfirmGenerar({ open: false, transferencia: null })}
+            color="inherit"
+          >
+            Cancelar
+          </Button>
+          <Button
+            onClick={handleConfirmGenerar}
+            variant="contained"
+            color="primary"
+            disabled={generandoRecibo}
+            startIcon={generandoRecibo ? <CircularProgress size={16} /> : <PostAddIcon />}
+          >
+            {generandoRecibo ? 'Generando...' : 'Confirmar y Generar'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {modalAbierto && transferenciaEditando && (
         <EditarTransferenciaModal

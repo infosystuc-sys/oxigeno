@@ -22,6 +22,14 @@ import {
   normalizarCUITDigits,
   normalizarCBU,
 } from './services/destinosValidation.js';
+import puppeteer from 'puppeteer';
+import {
+  templateRecibo,
+  templateComprobantePago,
+  loadLogoDataUri,
+  generarNumeroDocumento,
+} from './templates/documentos.js';
+import { registrarReciboEnGVA12 } from './services/tangoIntegration.js';
 
 dotenv.config();
 
@@ -53,6 +61,69 @@ const getPool = async () => {
   if (!pool) pool = await sql.connect(sqlConfig);
   return pool;
 };
+
+/** HTML → PDF (Puppeteer / Chromium). */
+async function renderPdfBuffer(html) {
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 60_000 });
+    return await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '20px', right: '20px', bottom: '20px', left: '20px' },
+    });
+  } finally {
+    await browser.close();
+  }
+}
+
+const SQL_TRANSFER_DOCUMENTO = `
+  SELECT TOP 1
+    t.id, t.CodigoTransferencia, t.PersonaAsignada, t.Cliente, t.COD_CLIENT, t.TIPO_ORIGEN, t.Destino,
+    t.Usuario, t.TipoTransaccion, t.Monto, t.Estado,
+    FORMAT(t.FECHA, 'dd/MM/yyyy') AS FECHA,
+    FORMAT(t.FechaComprobante, 'dd/MM/yyyy') AS FechaComprobante,
+    FORMAT(t.FechaEnvio, 'dd/MM/yyyy') AS FechaEnvio,
+    FORMAT(t.FechaRegistro, 'dd/MM/yyyy HH:mm') AS FechaRegistro,
+    t.IDTransferencia, t.CUITOrigen, t.CtaOrigen, t.CBUOrigen,
+    t.CUITDestino, t.CtaDestino, t.CBUDestino, t.Banco, t.Concepto,
+    t.destino_id, t.destino_tipo, t.cuenta_tercera_id, t.tercero_proveedor_id,
+    d.destinos, d.razon_social, d.cuit, d.codigo_proveedor_tango,
+    d.banco AS destino_banco, d.cbu AS destino_cbu, d.numero_cuenta AS destino_numero_cuenta,
+    pt.nombre_tercero, pt.cuit_tercero, pt.banco AS tercero_banco, pt.cbu AS tercero_cbu, pt.numero_cuenta AS tercero_numero_cuenta
+  FROM dbo.NSFW_Transferencias t
+  LEFT JOIN dbo.NSFW_Destinos d ON d.id = t.destino_id
+  LEFT JOIN dbo.NSFW_Proveedores_Terceros pt ON pt.id = t.tercero_proveedor_id
+  WHERE t.id = @id
+`;
+
+function rowToDestinoInfoDoc(row) {
+  if (!row || (row.destino_id == null && !row.destinos && !row.razon_social)) return null;
+  return {
+    destinos: row.destinos,
+    razon_social: row.razon_social,
+    cuit: row.cuit,
+    codigo_proveedor_tango: row.codigo_proveedor_tango,
+    banco: row.destino_banco,
+    cbu: row.destino_cbu,
+    numero_cuenta: row.destino_numero_cuenta,
+  };
+}
+
+function rowToTerceroInfoDoc(row) {
+  if (!row || row.tercero_proveedor_id == null) return null;
+  return {
+    nombre_tercero: row.nombre_tercero,
+    cuit_tercero: row.cuit_tercero,
+    banco: row.tercero_banco,
+    cbu: row.tercero_cbu,
+    numero_cuenta: row.tercero_numero_cuenta,
+  };
+}
 
 // ─── Helper: DD/MM/AAAA o YYYY-MM-DD → Date ──────────────────────────────────
 const toSqlDate = (str) => {
@@ -1385,6 +1456,159 @@ app.delete('/api/personas-asignadas/:id', async (req, res) => {
   }
 });
 
+// ─── Documentos: Recibo / Comprobante de pago ─────────────────────────────────
+
+// GET  /visualizar-recibo      → solo preview HTML (NO crea registro en GVA12)
+// GET  /visualizar-recibo-pdf  → solo PDF          (NO crea registro en GVA12)
+// POST /generar-recibo         → crea registro en GVA12 + devuelve JSON con datos
+
+app.get('/api/transfers/:id/visualizar-recibo', async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (Number.isNaN(id)) return res.status(400).json({ error: 'id inválido' });
+  try {
+    const db = await getPool();
+    const result = await db.request().input('id', sql.Int, id).query(SQL_TRANSFER_DOCUMENTO);
+    if (!result.recordset.length) return res.status(404).json({ error: 'Transferencia no encontrada' });
+    const row = result.recordset[0];
+    const html = templateRecibo(row, { logoSrc: loadLogoDataUri(), forPdf: false });
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (err) {
+    console.error('[API] visualizar-recibo error:', err.message);
+    res.status(500).json({ error: 'Error al visualizar recibo' });
+  }
+});
+
+app.get('/api/transfers/:id/visualizar-recibo-pdf', async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (Number.isNaN(id)) return res.status(400).json({ error: 'id inválido' });
+  try {
+    const db = await getPool();
+    const result = await db.request().input('id', sql.Int, id).query(SQL_TRANSFER_DOCUMENTO);
+    if (!result.recordset.length) return res.status(404).json({ error: 'Transferencia no encontrada' });
+    const row = result.recordset[0];
+    const logo = loadLogoDataUri();
+    const html = templateRecibo(row, { logoSrc: logo, forPdf: true });
+    const pdf = await renderPdfBuffer(html);
+    const numero = generarNumeroDocumento('recibo', id);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="Recibo_Preview_${numero}.pdf"`);
+    res.send(Buffer.from(pdf));
+  } catch (err) {
+    console.error('[API] visualizar-recibo-pdf error:', err.message);
+    res.status(500).json({ error: 'Error al generar PDF' });
+  }
+});
+
+app.post('/api/transfers/:id/generar-recibo', async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (Number.isNaN(id)) return res.status(400).json({ error: 'id inválido' });
+  try {
+    const db = await getPool();
+    const result = await db.request().input('id', sql.Int, id).query(SQL_TRANSFER_DOCUMENTO);
+    if (!result.recordset.length) return res.status(404).json({ error: 'Transferencia no encontrada' });
+    const row = result.recordset[0];
+
+    let resultadoTango;
+    try {
+      resultadoTango = await registrarReciboEnGVA12(db, row);
+    } catch (tangoErr) {
+      // Error específico: recibo ya emitido anteriormente
+      if (tangoErr.message === 'RECIBO_YA_EMITIDO') {
+        console.warn(`[API] Recibo ya emitido para transferencia ID=${id}`);
+        return res.status(409).json({
+          error: 'El recibo ya fue generado para esta transferencia',
+          codigo: 'RECIBO_YA_EMITIDO',
+        });
+      }
+
+      // Cualquier otro error de Tango
+      console.error('[API] Error al registrar en Tango:', tangoErr.message);
+      return res.status(500).json({
+        error: 'No se pudo registrar el recibo en Tango',
+        detalle: tangoErr.message,
+      });
+    }
+
+    console.log(
+      `[API] Recibo registrado — N_COMP: ${resultadoTango.nComp}` +
+        ` | ID_GVA12: ${resultadoTango.idGva12 ?? 'N/A'}` +
+        ` | ID_SBA04: ${resultadoTango.idSba04}` +
+        ` | N_INTERNO_SBA04: ${resultadoTango.nInternoSba04}` +
+        ` | GVA12 insertado: ${resultadoTango.insertóGVA12}`
+    );
+
+    res.json({
+      success: true,
+      message: 'Recibo generado y registrado en Tango correctamente',
+      n_comp: resultadoTango.nComp,
+      ncomp_in_v: resultadoTango.ncompInV,
+      id_gva12: resultadoTango.idGva12 ?? null,
+      id_sba04: resultadoTango.idSba04,
+      n_interno_sba04: resultadoTango.nInternoSba04,
+      insertó_gva12: resultadoTango.insertóGVA12,
+    });
+  } catch (err) {
+    console.error('[API] generar-recibo error:', err.message);
+    res.status(500).json({ error: 'Error al generar recibo' });
+  }
+});
+
+app.get('/api/transfers/:id/generar-comprobante-pago', async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (Number.isNaN(id)) return res.status(400).json({ error: 'id inválido' });
+  try {
+    const db = await getPool();
+    const result = await db.request().input('id', sql.Int, id).query(SQL_TRANSFER_DOCUMENTO);
+    if (!result.recordset.length) return res.status(404).json({ error: 'Transferencia no encontrada' });
+    const row = result.recordset[0];
+    if (String(row.Estado || '').trim() !== 'Utilizada') {
+      return res.status(400).json({
+        error: 'El comprobante de pago solo puede generarse para transferencias en estado Utilizada',
+      });
+    }
+    const destinoInfo = rowToDestinoInfoDoc(row);
+    const terceroInfo = rowToTerceroInfoDoc(row);
+    const html = templateComprobantePago(row, destinoInfo, terceroInfo, {
+      logoSrc: loadLogoDataUri(),
+      forPdf: false,
+    });
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (err) {
+    console.error('[API] generar-comprobante-pago error:', err.message);
+    res.status(500).json({ error: 'Error al generar comprobante de pago' });
+  }
+});
+
+app.get('/api/transfers/:id/generar-comprobante-pago-pdf', async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (Number.isNaN(id)) return res.status(400).json({ error: 'id inválido' });
+  try {
+    const db = await getPool();
+    const result = await db.request().input('id', sql.Int, id).query(SQL_TRANSFER_DOCUMENTO);
+    if (!result.recordset.length) return res.status(404).json({ error: 'Transferencia no encontrada' });
+    const row = result.recordset[0];
+    if (String(row.Estado || '').trim() !== 'Utilizada') {
+      return res.status(400).json({
+        error: 'El comprobante de pago solo puede generarse para transferencias en estado Utilizada',
+      });
+    }
+    const destinoInfo = rowToDestinoInfoDoc(row);
+    const terceroInfo = rowToTerceroInfoDoc(row);
+    const logo = loadLogoDataUri();
+    const html = templateComprobantePago(row, destinoInfo, terceroInfo, { logoSrc: logo, forPdf: true });
+    const pdf = await renderPdfBuffer(html);
+    const numero = generarNumeroDocumento('pago', id);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="ComprobantePago_${numero}.pdf"`);
+    res.send(Buffer.from(pdf));
+  } catch (err) {
+    console.error('[API] generar-comprobante-pago-pdf error:', err.message);
+    res.status(500).json({ error: 'Error al generar PDF' });
+  }
+});
+
 // ─── GET /api/transfers/:id — Una transferencia ────────────────────────────────
 app.get('/api/transfers/:id', async (req, res) => {
   const id = parseInt(req.params.id, 10);
@@ -1550,6 +1774,8 @@ app.get('/api/transfers', async (req, res) => {
       SELECT TOP 50
         t.id, t.CodigoTransferencia, t.PersonaAsignada, t.Cliente, t.COD_CLIENT, t.TIPO_ORIGEN, t.Destino,
         t.Usuario, t.TipoTransaccion, t.Monto, t.Estado,
+        t.REC_EMITIDO,
+        t.OP_EMITIDA,
         FORMAT(t.FECHA, 'dd/MM/yyyy') AS FECHA,
         FORMAT(t.FechaComprobante, 'dd/MM/yyyy') AS FechaComprobante,
         FORMAT(t.FechaEnvio, 'dd/MM/yyyy') AS FechaEnvio,

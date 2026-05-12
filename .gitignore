@@ -1,14 +1,28 @@
 # Dependencias
 node_modules/
+mcp-server/node_modules/
 
-# Build
-dist/
-
-# Secretos — repo público: no subir credenciales
+# Variables de entorno (NUNCA subir al repositorio)
 .env
 .env.*
 !.env.example
+mcp-server/.env
+
+# Builds
+dist/
+build/
 
 # Logs
 *.log
 npm-debug.log*
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Backups locales
+*.sql

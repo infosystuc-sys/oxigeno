@@ -1,0 +1,48 @@
+CAMPO;TIPO;VALOR
+ID_SBA04;Incremental;109445
+FILLER;fijo;                    
+BARRA;fijo;0
+CERRADO;fijo;0
+CLASE;fijo;1
+COD_COMP;fijo;REC
+CONCEPTO;fijo;COBRANZA EN CTA CTE
+COTIZACION;fijo;10.000.000
+EXPORTADO;fijo;0
+EXTERNO;fijo;1
+FECHA;;Fecha de la transferencia
+FECHA_ING;;fecha actual
+HORA_ING;;Hora actual
+N_COMP;;Toma desde la tabla NSFW_proximo.proximo el valor y pone el prefijo C00003. Rellena con ceros hasta cubrir 8 caracteres. 14  totales.
+N_INTERNO;;Busca el ultimo en la tabla y le agrega 1
+PASE;fijo;0
+SITUACION;fijo;N
+TERMINAL;fijo;#ASTORCLI#DESKTOP-AL8R3OG
+USUARIO;fijo;SUPERVISOR
+LOTE;fijo;0
+LOTE_ANU;fijo;0
+SUCUR_ORI;fijo;0
+FECHA_ORI;fijo;1800-01-01 00:00:00.000
+C_COMP_ORI;fijo;
+N_COMP_ORI;fijo;
+BARRA_ORI;fijo;0
+FECHA_EMIS;;Fecha de la transferencia
+GENERA_ASIENTO;fijo;S
+FECHA_ULTIMA_MODIFICACION;fijo;NULL
+HORA_ULTIMA_MODIFICACION;fijo;
+USUA_ULTIMA_MODIFICACION;fijo;
+TERM_ULTIMA_MODIFICACION;fijo;
+ID_PUESTO_CAJA;fijo;NULL
+ID_GVA81;fijo;NULL
+ID_SBA02;fijo;3
+ID_SBA02_C_COMP_ORI;fijo;NULL
+COD_GVA14;;Valor del campo cod_client de la tabla NSFW_Transferencia
+COD_CPA01;fijo;NULL
+ID_CODIGO_RELACION;fijo;NULL
+ID_LEGAJO;fijo;NULL
+OBSERVACIONES;fijo;NULL
+TIPO_COD_RELACIONADO;fijo;C
+CN_ASTOR;fijo;N
+ID_MODELO_INGRESO_SB;fijo;NULL
+TOTAL_IMPORTE_CTE;;importe de la transferencia
+TOTAL_IMPORTE_EXT;;importe de la transferencia
+TRANSFERENCIA_DEVOLUCION_CUPONES;fijo;N

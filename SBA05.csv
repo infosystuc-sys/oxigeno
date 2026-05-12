@@ -1,0 +1,47 @@
+CAMPO;TIPO;REGISTRO 1;REGISTRO 2
+ID_SBA05;Incremental;159890;159889
+FILLER;fijo;;
+BARRA;fijo;0;0
+CANT_MONE;;importe de la transferencia;
+CHEQUES;fijo;0.0000000;0.0000000
+CLASE;fijo;1;1
+COD_COMP;fijo;REC;REC
+COD_CTA;fijo;1;31
+COD_OPERAC;fijo;;
+CONCILIADO;fijo;0;0
+COTIZ_MONE;fijo;10000000;10000000
+D_H;fijo;D;H
+EFECTIVO;fijo;0.0000000;0.0000000
+FECHA;;fecha transferencia;
+FECHA_CONC;fijo;1800-01-01 00:00:00.000;1800-01-01 00:00:00.000
+LEYENDA;;Valor del campo persona asiganada de la tabla NSFW_Transferencia;
+MONTO;;importe de la transferencia;
+N_COMP;;Toma desde la tabla NSFW_proximo.proximo el valor y pone el prefijo C00003. Rellena con ceros hasta cubrir 8 caracteres. 14  totales.;
+RENGLON;Fijo;1;0
+UNIDADES;;importe de la transferencia;
+VA_DIRECTO;fijo;N;N
+ID_SBA02;fijo;3;3
+ID_GVA81;fijo;NULL;NULL
+CONC_EFTV;fijo;0;0
+F_CONC_EFT;fijo;1800-01-01 00:00:00.000;1800-01-01 00:00:00.000
+COMENTARIO;fijo;;
+COMENTARIO_EFT;fijo;;
+COD_GVA14;;Valor del campo cod_client de la tabla NSFW_Transferencia;
+COD_CPA01;fijo;NULL;NULL
+ID_CODIGO_RELACION;fijo;NULL;NULL
+ID_LEGAJO;fijo;NULL;NULL
+TIPO_COD_RELACIONADO;fijo;C;C
+ID_TIPO_COTIZACION;fijo;NULL;NULL
+ID_SBA11;fijo;NULL;NULL
+ID_SBA04;;Valor asignado en la tabla SBA04 para el movimiento;
+ID_SBA01;fijo;1;11
+;;;
+;;;
+;;;
+;;;
+;;;
+;;;
+;;;
+;;;
+;;;
+;;;
