@@ -1,6 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useBarcodeScanner } from '../../hooks/useBarcodeScanner';
-import { buscarClientes, guardarRemitoCliente } from '../../api/clientes';
+import {
+  buscarClientes,
+  guardarRemitoCliente,
+  obtenerProximoRemito,
+} from '../../api/clientes';
 import { obtenerGases } from '../../api/recepcion';
 import type {
   Cliente,
@@ -97,16 +101,15 @@ function SuccessScreen({
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export function RemitoClienteForm() {
-  // Datos del remito
-  const [remito,       setRemito]       = useState('');
   const [fecha,        setFecha]        = useState(todayISO);
+  const [nroComprobante, setNroComprobante] = useState<string | null>(null);
+  const [nroCompLoading, setNroCompLoading] = useState(true);
   const [cliente,      setCliente]      = useState<Cliente | null>(null);
   const [cliSearch,    setCliSearch]    = useState('');
   const [cliResults,   setCliResults]   = useState<Cliente[]>([]);
   const [cliLoading,   setCliLoading]   = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
 
-  // Artículos / gases
   const [gases,           setGases]           = useState<Articulo[]>([]);
   const [currentSlot,     setCurrentSlot]     = useState<CurrentSlot>({
     articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '',
@@ -115,7 +118,6 @@ export function RemitoClienteForm() {
   const allSeriesRef = useRef<Set<string>>(new Set());
   const scanZoneRef  = useRef<HTMLDivElement>(null);
 
-  // Estado de guardado / resultado
   const [saving,    setSaving]    = useState(false);
   const [resultado, setResultado] = useState<RemitoClienteResponse | null>(null);
   const [apiError,  setApiError]  = useState<string | null>(null);
@@ -123,6 +125,14 @@ export function RemitoClienteForm() {
   // ── Carga inicial ────────────────────────────────────────────────────────
   useEffect(() => {
     obtenerGases().then(setGases).catch(console.error);
+  }, []);
+
+  useEffect(() => {
+    setNroCompLoading(true);
+    obtenerProximoRemito()
+      .then(nro => setNroComprobante(nro))
+      .catch(() => setNroComprobante(null))
+      .finally(() => setNroCompLoading(false));
   }, []);
 
   // ── Búsqueda de cliente (debounce 300ms) ──────────────────────────────────
@@ -164,20 +174,17 @@ export function RemitoClienteForm() {
     setCurrentSlot({ articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '' });
   }
 
-  // ── Seleccionar gas ───────────────────────────────────────────────────────
   function selectGas(gas: Articulo) {
     confirmCurrentSlot();
     setCurrentSlot({ articulo: gas, series: [], gasSearch: '', showDropdown: false, manualInput: '' });
     setTimeout(() => scanZoneRef.current?.focus(), 50);
   }
 
-  // ── Limpiar slot actual ───────────────────────────────────────────────────
   function clearCurrentSlot() {
     currentSlot.series.forEach(s => allSeriesRef.current.delete(s));
     setCurrentSlot({ articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '' });
   }
 
-  // ── Agregar serie al slot actual ──────────────────────────────────────────
   const addSerie = useCallback((code: string) => {
     const trimmed = code.trim();
     if (trimmed.length < 3) return;
@@ -191,7 +198,6 @@ export function RemitoClienteForm() {
     setCurrentSlot(prev => ({ ...prev, series: [...prev.series, trimmed] }));
   }, []);
 
-  // ── Callback del scanner ──────────────────────────────────────────────────
   const handleScan = useCallback(
     (code: string) => {
       if (!currentSlot.articulo) return;
@@ -202,18 +208,15 @@ export function RemitoClienteForm() {
 
   useBarcodeScanner(handleScan, !!currentSlot.articulo && !saving && resultado === null);
 
-  // ── Derivados ─────────────────────────────────────────────────────────────
   const totalConfirmed = confirmedGroups.reduce((n, g) => n + g.series.length, 0);
   const totalSeries    = totalConfirmed + currentSlot.series.length;
-  const canSave        = !!remito.trim() && !!cliente && totalSeries > 0 && !saving;
+  const canSave        = !!cliente && totalSeries > 0 && !saving && !nroCompLoading;
 
-  // ── Eliminar serie del slot actual ────────────────────────────────────────
   function removeCurrentSerie(serie: string) {
     allSeriesRef.current.delete(serie);
     setCurrentSlot(prev => ({ ...prev, series: prev.series.filter(s => s !== serie) }));
   }
 
-  // ── Eliminar serie de un grupo confirmado ─────────────────────────────────
   function removeConfirmedSerie(codArticu: string, serie: string) {
     allSeriesRef.current.delete(serie);
     setConfirmedGroups(prev =>
@@ -226,7 +229,6 @@ export function RemitoClienteForm() {
     );
   }
 
-  // ── Eliminar grupo confirmado completo ────────────────────────────────────
   function removeConfirmedGroup(codArticu: string) {
     setConfirmedGroups(prev => {
       const group = prev.find(g => g.articulo.cod_articu === codArticu);
@@ -235,7 +237,6 @@ export function RemitoClienteForm() {
     });
   }
 
-  // ── Guardar ───────────────────────────────────────────────────────────────
   async function handleGuardar() {
     if (!canSave || !cliente) return;
     setSaving(true);
@@ -254,7 +255,6 @@ export function RemitoClienteForm() {
 
     const payload: PostRemitoClientePayload = {
       cod_client: cliente.cod_client,
-      nro_remito: remito.trim(),
       fecha,
       items: allGroups.map(g => ({ cod_articu: g.articulo.cod_articu, series: g.series })),
     };
@@ -272,9 +272,7 @@ export function RemitoClienteForm() {
     }
   }
 
-  // ── Limpiar formulario ────────────────────────────────────────────────────
   function handleNuevo() {
-    setRemito('');
     setFecha(todayISO());
     setCliente(null);
     setCliSearch('');
@@ -285,9 +283,14 @@ export function RemitoClienteForm() {
     allSeriesRef.current = new Set();
     setResultado(null);
     setApiError(null);
+    // Recargar el próximo comprobante
+    setNroCompLoading(true);
+    obtenerProximoRemito()
+      .then(nro => setNroComprobante(nro))
+      .catch(() => setNroComprobante(null))
+      .finally(() => setNroCompLoading(false));
   }
 
-  // ── Pantalla de éxito ─────────────────────────────────────────────────────
   if (resultado?.success) {
     return <SuccessScreen resultado={resultado} totalSeries={totalSeries} onNuevo={handleNuevo} />;
   }
@@ -332,17 +335,21 @@ export function RemitoClienteForm() {
               </h2>
 
               <div className="grid grid-cols-2 gap-4">
-                {/* Nro comprobante */}
+                {/* Nro. Comprobante (pre-cargado) */}
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
                     Nro. Comprobante
                   </label>
-                  <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3">
-                    <span className="text-gray-400 text-sm italic">Se asignará al guardar</span>
-                    <svg className="w-4 h-4 text-gray-300 ml-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                        d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                    </svg>
+                  <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 min-h-[48px]">
+                    {nroCompLoading ? (
+                      <span className="text-gray-400 text-sm animate-pulse">Cargando…</span>
+                    ) : nroComprobante ? (
+                      <span className="font-mono text-base font-bold text-blue-700 tracking-wide">
+                        {nroComprobante}
+                      </span>
+                    ) : (
+                      <span className="text-red-400 text-sm">Error al obtener número</span>
+                    )}
                   </div>
                   <p className="text-[11px] text-gray-400 mt-1">Asignado automáticamente al guardar</p>
                 </div>
@@ -360,33 +367,6 @@ export function RemitoClienteForm() {
                                focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
                   />
                 </div>
-              </div>
-
-              {/* Nro. Remito */}
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
-                  Nro. Remito <span className="text-red-400">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={remito}
-                  maxLength={14}
-                  onChange={e => {
-                    const raw = e.target.value;
-                    let filtered = '';
-                    for (let i = 0; i < Math.min(raw.length, 14); i++) {
-                      if (i === 0) {
-                        if (/[a-zA-Z]/.test(raw[i])) filtered += raw[i].toUpperCase();
-                      } else {
-                        if (/[0-9]/.test(raw[i])) filtered += raw[i];
-                      }
-                    }
-                    setRemito(filtered);
-                  }}
-                  placeholder="Ej: R00010012345"
-                  className="w-full border border-gray-300 rounded-xl px-4 py-3 text-lg
-                             focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
-                />
               </div>
 
               {/* Cliente */}

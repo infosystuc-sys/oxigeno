@@ -5,9 +5,8 @@ export interface Cliente {
 
 export interface PostRemitoClientePayload {
   cod_client: string;
-  nro_remito: string;
-  fecha:       string; // 'YYYY-MM-DD'
-  items:       ItemRemitoCliente[];
+  fecha:      string; // 'YYYY-MM-DD'
+  items:      ItemRemitoCliente[];
 }
 
 export interface ItemRemitoCliente {

@@ -8,6 +8,11 @@ export async function buscarClientes(search: string): Promise<Cliente[]> {
   return data;
 }
 
+export async function obtenerProximoRemito(): Promise<string> {
+  const { data } = await axios.get<{ nro_comprobante: string }>(`${BASE}/remito-cliente/proximo`);
+  return data.nro_comprobante;
+}
+
 export async function guardarRemitoCliente(
   payload: PostRemitoClientePayload,
 ): Promise<RemitoClienteResponse> {

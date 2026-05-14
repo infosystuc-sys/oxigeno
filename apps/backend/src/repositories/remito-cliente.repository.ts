@@ -1,14 +1,10 @@
 /**
  * remito-cliente.repository.ts
  *
- * Escribe un remito a cliente en las tablas de Tango.
- * Lógica idéntica a recepcion.repository.ts — los campos específicos
- * se ajustarán cuando se indiquen las modificaciones de negocio.
- *
  * Flujo:
  *  1. Consultar STA11 y STA_ARTICULO_UNIDAD_COMPRA por cada artículo (fuera de la tx)
  *  2. Iniciar transacción
- *  3. Leer CPA56.PROXIMO (TALONARIO=11) con UPDLOCK → N_COMP de STA14
+ *  3. Leer RIV_PROXIMO.PROXIMO (T_COMP='REM') con UPDLOCK → nComp = 'R00009' + PROXIMO
  *  4. Calcular NCOMP_IN_S: MAX(STA14.NCOMP_IN_S WHERE TCOMP='RP')+1
  *  5. INSERT sta14 → captura ID_STA14
  *  6. Por cada artículo:
@@ -16,7 +12,7 @@
  *       Por cada serie:
  *         UPSERT sta06
  *         INSERT sta07
- *  7. Incrementar CPA56.PROXIMO
+ *  7. Incrementar RIV_PROXIMO.PROXIMO
  *  8. COMMIT
  */
 import { getPool, sql } from '../config/db';
@@ -25,6 +21,27 @@ import type { PostRemitoClientePayload, RemitoClienteResponse } from '@oxigeno/s
 const COD_DEP    = '30';
 const ESTADO_MOV = 'P';
 const TCOMP      = 'RP';
+const TCOMP_REM  = 'REM';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Consulta pública: próximo número de remito (sin lock, solo para pre-visualizar)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function obtenerProximoRemito(): Promise<string> {
+  const pool = await getPool();
+  const res  = await pool.request()
+    .input('t_comp', sql.VarChar(3), TCOMP_REM)
+    .query<{ PROXIMO: string }>(`
+      SELECT PROXIMO
+      FROM RIV_PROXIMO WITH (NOLOCK)
+      WHERE T_COMP = @t_comp
+    `);
+
+  if (res.recordset.length === 0) {
+    throw new Error(`No se encontró T_COMP='${TCOMP_REM}' en RIV_PROXIMO`);
+  }
+  return 'R00009' + res.recordset[0].PROXIMO;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Paso 1a: consultar STA11
@@ -84,33 +101,33 @@ async function consultarUnidadCompra(idSta11: number): Promise<UnidadCompraData>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Paso 3: leer CPA56.PROXIMO con UPDLOCK
+// Paso 3: leer RIV_PROXIMO.PROXIMO con UPDLOCK
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function leerCpa56(req: sql.Request): Promise<string> {
+async function leerRivProximo(req: sql.Request): Promise<string> {
   const res = await req
-    .input('talonario', sql.Int, 11)
+    .input('t_comp', sql.VarChar(3), TCOMP_REM)
     .query<{ PROXIMO: string }>(`
       SELECT PROXIMO
-      FROM CPA56 WITH (UPDLOCK)
-      WHERE TALONARIO = @talonario
+      FROM RIV_PROXIMO WITH (UPDLOCK)
+      WHERE T_COMP = @t_comp
     `);
 
   if (res.recordset.length === 0) {
-    throw new Error('No se encontró el talonario 11 en CPA56');
+    throw new Error(`No se encontró T_COMP='${TCOMP_REM}' en RIV_PROXIMO`);
   }
   return res.recordset[0].PROXIMO;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Paso 7: incrementar CPA56.PROXIMO
+// Paso 7: incrementar RIV_PROXIMO.PROXIMO
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function incrementarCpa56(req: sql.Request): Promise<void> {
+async function incrementarRivProximo(req: sql.Request): Promise<void> {
   await req.query(`
-    UPDATE CPA56
+    UPDATE RIV_PROXIMO
     SET PROXIMO = RIGHT('00000000' + CAST(CAST(PROXIMO AS INT) + 1 AS VARCHAR(10)), 8)
-    WHERE TALONARIO = @talonario
+    WHERE T_COMP = @t_comp
   `);
 }
 
@@ -137,7 +154,7 @@ async function leerNroComp(req: sql.Request): Promise<string> {
 async function insertarEncabezado(
   req:     sql.Request,
   nroComp: string,
-  nComp:   string,
+  nComp:   string,   // 'R00009' + PROXIMO — va en N_COMP y en N_REMITO
   payload: PostRemitoClientePayload,
 ): Promise<number> {
   const now         = new Date();
@@ -149,13 +166,13 @@ async function insertarEncabezado(
   );
 
   req.input('h_tcomp',       sql.VarChar(2),    TCOMP);
-  req.input('h_tcomp_ex',    sql.VarChar(3),    'REM');
+  req.input('h_tcomp_ex',    sql.VarChar(3),    TCOMP_REM);
   req.input('h_ncomp_in_s',  sql.VarChar(8),    nroComp);
   req.input('h_ncomp',       sql.VarChar(14),   nComp);
   req.input('h_fecha',       sql.Date,          new Date(payload.fecha));
   req.input('h_fecha_ing',   sql.DateTime,      now);
   req.input('h_client',      sql.VarChar(6),    payload.cod_client);
-  req.input('h_remito',      sql.VarChar(14),   payload.nro_remito.substring(0, 14));
+  req.input('h_remito',      sql.VarChar(14),   nComp);   // N_REMITO = mismo nComp
   req.input('h_estado',      sql.VarChar(1),    ESTADO_MOV);
   req.input('h_deposi',      sql.VarChar(2),    COD_DEP);
   req.input('h_cotiz',       sql.Decimal(18,4), 1);
@@ -323,7 +340,7 @@ async function insertarMovimientoSerie(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Función pública
+// Función pública: guardar
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function guardarRemitoCliente(
@@ -348,9 +365,9 @@ export async function guardarRemitoCliente(
     await transaction.begin();
     const req = new sql.Request(transaction);
 
-    // ── 3. Leer CPA56.PROXIMO con UPDLOCK ─────────────────────────────────
-    const proximoCpa56 = await leerCpa56(req);
-    const nComp        = ' 00000' + proximoCpa56;
+    // ── 3. Leer RIV_PROXIMO con UPDLOCK ───────────────────────────────────
+    const proximo = await leerRivProximo(req);
+    const nComp   = 'R00009' + proximo;   // 14 chars
 
     // ── 4. Calcular NCOMP_IN_S desde MAX de STA14 ─────────────────────────
     const nroComp = await leerNroComp(req);
@@ -380,16 +397,16 @@ export async function guardarRemitoCliente(
       }
     }
 
-    // ── 7. Incrementar CPA56.PROXIMO ──────────────────────────────────────
-    await incrementarCpa56(req);
+    // ── 7. Incrementar RIV_PROXIMO ────────────────────────────────────────
+    await incrementarRivProximo(req);
 
     // ── 8. Confirmar ──────────────────────────────────────────────────────
     await transaction.commit();
 
     return {
       success:         true,
-      nro_comprobante: nroComp,
-      message:         `Remito guardado. Comprobante ${TCOMP}-${nroComp}`,
+      nro_comprobante: nComp,
+      message:         `Remito guardado. Comprobante ${nComp}`,
     };
   } catch (err) {
     console.error('[remito-cliente] Error en transacción:', err);

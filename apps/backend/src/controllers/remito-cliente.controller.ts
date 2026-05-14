@@ -1,6 +1,9 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
-import { guardarRemitoCliente } from '../repositories/remito-cliente.repository';
+import {
+  guardarRemitoCliente,
+  obtenerProximoRemito,
+} from '../repositories/remito-cliente.repository';
 
 const ItemSchema = z.object({
   cod_articu: z.string().min(1, 'cod_articu requerido'),
@@ -9,10 +12,19 @@ const ItemSchema = z.object({
 
 const RemitoClienteSchema = z.object({
   cod_client: z.string().min(1, 'cod_client requerido'),
-  nro_remito: z.string().min(1, 'nro_remito requerido'),
   fecha:      z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'fecha debe tener formato YYYY-MM-DD'),
   items:      z.array(ItemSchema).min(1, 'Se requiere al menos un artículo'),
 });
+
+export async function getProximoRemito(_req: Request, res: Response): Promise<void> {
+  try {
+    const nro_comprobante = await obtenerProximoRemito();
+    res.json({ nro_comprobante });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Error interno';
+    res.status(500).json({ error: msg });
+  }
+}
 
 export async function postRemitoCliente(req: Request, res: Response): Promise<void> {
   const parsed = RemitoClienteSchema.safeParse(req.body);
