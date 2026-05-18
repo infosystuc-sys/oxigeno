@@ -1,12 +1,14 @@
 import { useState } from 'react';
-import { RecepcionForm } from './features/recepcion/RecepcionForm';
-import { RemitoClienteForm } from './features/remito-cliente/RemitoClienteForm';
+import { RecepcionForm }           from './features/recepcion/RecepcionForm';
+import { RemitoClienteForm }       from './features/remito-cliente/RemitoClienteForm';
+import { MovimientoDepositosForm } from './features/movimiento-depositos/MovimientoDepositosForm';
 
-type Section = 'recepcion' | 'remito-cliente';
+type Section = 'recepcion' | 'remito-cliente' | 'movimiento-depositos';
 
 const NAV_ITEMS: { id: Section; label: string; icon: string }[] = [
-  { id: 'recepcion',       label: 'Informe de Recepción', icon: '📦' },
-  { id: 'remito-cliente',  label: 'Remito a Clientes',    icon: '🚚' },
+  { id: 'recepcion',             label: 'Informe de Recepción',      icon: '📦' },
+  { id: 'remito-cliente',        label: 'Remito a Clientes',         icon: '🚚' },
+  { id: 'movimiento-depositos',  label: 'Movimiento entre Depósitos', icon: '🔄' },
 ];
 
 export default function App() {
@@ -42,8 +44,9 @@ export default function App() {
 
       {/* ── Main content ────────────────────────────────────────── */}
       <main className="flex-1 overflow-auto">
-        {section === 'recepcion'      && <RecepcionForm />}
-        {section === 'remito-cliente' && <RemitoClienteForm />}
+        {section === 'recepcion'            && <RecepcionForm />}
+        {section === 'remito-cliente'       && <RemitoClienteForm />}
+        {section === 'movimiento-depositos' && <MovimientoDepositosForm />}
       </main>
     </div>
   );
