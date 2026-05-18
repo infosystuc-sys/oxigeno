@@ -202,7 +202,7 @@ export async function obtenerDetalle(idSta14: number): Promise<ComprobanteDetall
       .query<{ cod_articu: string; descrip: string; n_serie: string | null }>(`
         SELECT DISTINCT
           RTRIM(s20.COD_ARTICU)          AS cod_articu,
-          ISNULL(RTRIM(s11.DESCRIP), '') AS descrip,
+          ISNULL(RTRIM(s11.DESCRIPCIO), '') AS descrip,
           RTRIM(s7.N_SERIE)              AS n_serie
         FROM STA20 s20 WITH (NOLOCK)
         LEFT JOIN STA11 s11 WITH (NOLOCK)
