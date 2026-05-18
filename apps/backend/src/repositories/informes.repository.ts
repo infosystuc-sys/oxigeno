@@ -248,7 +248,7 @@ export async function trazabilidadSerie(nSerie: string): Promise<TrazabilidadSer
         SELECT TOP 1
           RTRIM(s6.COD_ARTICU)                                         AS cod_articu,
           RTRIM(s6.N_SERIE)                                            AS n_serie,
-          ISNULL(RTRIM(s11.DESCRIP), '')                               AS descrip,
+          ISNULL(RTRIM(s11.DESCRIPCIO), '')                            AS descrip,
           RTRIM(s6.COD_DEPOSI)                                         AS cod_deposi_actual,
           ISNULL(RTRIM(s22.NOMBRE_SUC), RTRIM(s6.COD_DEPOSI))         AS deposito_actual_nombre
         FROM STA06 s6 WITH (NOLOCK)
