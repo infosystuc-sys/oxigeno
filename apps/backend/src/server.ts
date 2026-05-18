@@ -9,6 +9,7 @@ import talonarioRoutes           from './routes/talonario.routes';
 import clientesRoutes            from './routes/clientes.routes';
 import remitoClienteRoutes       from './routes/remito-cliente.routes';
 import movimientoDepositosRoutes from './routes/movimiento-depositos.routes';
+import informesRoutes            from './routes/informes.routes';
 
 const app  = express();
 const PORT = process.env.PORT ?? 3001;
@@ -24,6 +25,7 @@ app.use('/api/talonario',           talonarioRoutes);
 app.use('/api/clientes',            clientesRoutes);
 app.use('/api/remito-cliente',      remitoClienteRoutes);
 app.use('/api/movimiento-depositos', movimientoDepositosRoutes);
+app.use('/api/informes',             informesRoutes);
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
 

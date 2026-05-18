@@ -2,13 +2,15 @@ import { useState } from 'react';
 import { RecepcionForm }           from './features/recepcion/RecepcionForm';
 import { RemitoClienteForm }       from './features/remito-cliente/RemitoClienteForm';
 import { MovimientoDepositosForm } from './features/movimiento-depositos/MovimientoDepositosForm';
+import { InformesForm }            from './features/informes/InformesForm';
 
-type Section = 'recepcion' | 'remito-cliente' | 'movimiento-depositos';
+type Section = 'recepcion' | 'remito-cliente' | 'movimiento-depositos' | 'informes';
 
 const NAV_ITEMS: { id: Section; label: string; icon: string }[] = [
-  { id: 'recepcion',             label: 'Informe de Recepción',      icon: '📦' },
-  { id: 'remito-cliente',        label: 'Remito a Clientes',         icon: '🚚' },
+  { id: 'recepcion',             label: 'Informe de Recepción',       icon: '📦' },
+  { id: 'remito-cliente',        label: 'Remito a Clientes',          icon: '🚚' },
   { id: 'movimiento-depositos',  label: 'Movimiento entre Depósitos', icon: '🔄' },
+  { id: 'informes',              label: 'Informes',                   icon: '📊' },
 ];
 
 export default function App() {
@@ -47,6 +49,7 @@ export default function App() {
         {section === 'recepcion'            && <RecepcionForm />}
         {section === 'remito-cliente'       && <RemitoClienteForm />}
         {section === 'movimiento-depositos' && <MovimientoDepositosForm />}
+        {section === 'informes'             && <InformesForm />}
       </main>
     </div>
   );
