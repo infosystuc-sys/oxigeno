@@ -6,6 +6,7 @@ import {
   guardarMovimientoDeposito,
 } from '../../api/depositos';
 import { obtenerGases } from '../../api/recepcion';
+import { validarSerie } from '../../api/clientes';
 import type {
   Deposito,
   Articulo,
@@ -239,13 +240,17 @@ export function MovimientoDepositosForm() {
     articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '',
   });
   const [confirmedGroups, setConfirmedGroups] = useState<ConfirmedGroup[]>([]);
-  const allSeriesRef = useRef<Set<string>>(new Set());
-  const scanZoneRef  = useRef<HTMLDivElement>(null);
+  const allSeriesRef     = useRef<Set<string>>(new Set());
+  const invalidSeriesRef = useRef<Set<string>>(new Set());
+  const validatingRef    = useRef(false);
+  const scanZoneRef      = useRef<HTMLDivElement>(null);
 
-  const [saving,    setSaving]    = useState(false);
-  const [resultado, setResultado] = useState<MovimientoDepositoResponse | null>(null);
-  const [apiError,  setApiError]  = useState<string | null>(null);
-  const [printData, setPrintData] = useState<ComprobantePrintData | null>(null);
+  const [saving,           setSaving]           = useState(false);
+  const [validating,       setValidating]       = useState(false);
+  const [hasInvalidSeries, setHasInvalidSeries] = useState(false);
+  const [resultado,        setResultado]        = useState<MovimientoDepositoResponse | null>(null);
+  const [apiError,         setApiError]         = useState<string | null>(null);
+  const [printData,        setPrintData]        = useState<ComprobantePrintData | null>(null);
 
   // Refs para navegación con teclado
   const fechaRef    = useRef<HTMLInputElement>(null);
@@ -290,25 +295,57 @@ export function MovimientoDepositosForm() {
   }
 
   function clearCurrentSlot() {
-    currentSlot.series.forEach(s => allSeriesRef.current.delete(s));
+    const cod = currentSlot.articulo?.cod_articu ?? '';
+    currentSlot.series.forEach(s => {
+      allSeriesRef.current.delete(cod + ':' + s);
+      invalidSeriesRef.current.delete(cod + ':' + s);
+    });
+    setHasInvalidSeries(invalidSeriesRef.current.size > 0);
     setCurrentSlot({ articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '' });
   }
 
-  const addSerie = useCallback((code: string) => {
+  const addSerie = useCallback(async (code: string, codArticu: string) => {
     const trimmed = code.trim();
     if (trimmed.length < 3) return;
-    if (allSeriesRef.current.has(trimmed)) {
+    if (validatingRef.current) return;
+
+    const key = codArticu + ':' + trimmed;
+    if (allSeriesRef.current.has(key)) {
       beep(); setTimeout(beep, 150);
-      alert(`⚠️  La serie "${trimmed}" ya fue ingresada en este movimiento.`);
+      alert(`⚠️  La serie "${trimmed}" ya fue ingresada para este artículo en este movimiento.`);
       return;
     }
+
+    validatingRef.current = true;
+    setValidating(true);
+    let serieInvalida = false;
+    try {
+      const v = await validarSerie(codArticu, trimmed);
+      if (!v.existe) {
+        serieInvalida = true;
+      } else if (v.cod_deposi !== '30') {
+        alert(`⚠️  La serie "${trimmed}" está en el depósito ${v.cod_deposi}, no en el depósito 30. Se agrega de todos modos.`);
+      }
+    } catch {
+      alert(`Error al validar la serie "${trimmed}". Intente nuevamente.`);
+      return;
+    } finally {
+      validatingRef.current = false;
+      setValidating(false);
+    }
+
+    if (serieInvalida) {
+      invalidSeriesRef.current.add(key);
+      setHasInvalidSeries(true);
+    }
+
     beep();
-    allSeriesRef.current.add(trimmed);
+    allSeriesRef.current.add(key);
     setCurrentSlot(prev => ({ ...prev, series: [...prev.series, trimmed] }));
   }, []);
 
   const handleScan = useCallback(
-    (code: string) => { if (currentSlot.articulo) addSerie(code); },
+    (code: string) => { if (currentSlot.articulo) addSerie(code, currentSlot.articulo.cod_articu); },
     [currentSlot.articulo, addSerie]
   );
 
@@ -319,12 +356,19 @@ export function MovimientoDepositosForm() {
   const canSave        = !!depositoOrigen && !!depositoDestino && totalSeries > 0 && !saving && !nroCompLoading;
 
   function removeCurrentSerie(serie: string) {
-    allSeriesRef.current.delete(serie);
+    const cod = currentSlot.articulo?.cod_articu ?? '';
+    const key = cod + ':' + serie;
+    allSeriesRef.current.delete(key);
+    invalidSeriesRef.current.delete(key);
+    setHasInvalidSeries(invalidSeriesRef.current.size > 0);
     setCurrentSlot(prev => ({ ...prev, series: prev.series.filter(s => s !== serie) }));
   }
 
   function removeConfirmedSerie(codArticu: string, serie: string) {
-    allSeriesRef.current.delete(serie);
+    const key = codArticu + ':' + serie;
+    allSeriesRef.current.delete(key);
+    invalidSeriesRef.current.delete(key);
+    setHasInvalidSeries(invalidSeriesRef.current.size > 0);
     setConfirmedGroups(prev =>
       prev
         .map(g => g.articulo.cod_articu === codArticu
@@ -337,12 +381,26 @@ export function MovimientoDepositosForm() {
 
   function removeConfirmedGroup(codArticu: string) {
     const group = confirmedGroups.find(g => g.articulo.cod_articu === codArticu);
-    if (group) group.series.forEach(s => allSeriesRef.current.delete(s));
+    if (group) {
+      group.series.forEach(s => {
+        const key = codArticu + ':' + s;
+        allSeriesRef.current.delete(key);
+        invalidSeriesRef.current.delete(key);
+      });
+      setHasInvalidSeries(invalidSeriesRef.current.size > 0);
+    }
     setConfirmedGroups(prev => prev.filter(g => g.articulo.cod_articu !== codArticu));
   }
 
   async function handleGuardar() {
     if (!canSave || !depositoOrigen || !depositoDestino) return;
+    if (hasInvalidSeries) {
+      const ok = window.confirm(
+        '⚠️  Hay series que no existen en el sistema.\n\n' +
+        '¿Desea guardar el movimiento de todas formas?'
+      );
+      if (!ok) return;
+    }
     setSaving(true);
     setApiError(null);
 
@@ -397,7 +455,9 @@ export function MovimientoDepositosForm() {
     setDepositoDestino(null);
     setCurrentSlot({ articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '' });
     setConfirmedGroups([]);
-    allSeriesRef.current = new Set();
+    allSeriesRef.current     = new Set();
+    invalidSeriesRef.current = new Set();
+    setHasInvalidSeries(false);
     setResultado(null);
     setApiError(null);
     setPrintData(null);
@@ -447,6 +507,18 @@ export function MovimientoDepositosForm() {
                 </div>
                 <button onClick={() => setApiError(null)}
                   className="text-red-400 hover:text-red-600 text-xl leading-none mt-0.5">×</button>
+              </div>
+            )}
+
+            {hasInvalidSeries && (
+              <div className="flex items-start gap-3 bg-orange-50 border border-orange-300 text-orange-700 rounded-xl px-4 py-3">
+                <span className="text-2xl leading-none mt-0.5">⚠</span>
+                <div className="flex-1">
+                  <p className="font-semibold">Hay series que no existen en el sistema</p>
+                  <p className="text-sm mt-0.5">
+                    Las series marcadas en rojo no se encontraron en sta06. Puede guardar de todas formas o eliminarlas.
+                  </p>
+                </div>
               </div>
             )}
 
@@ -624,13 +696,25 @@ export function MovimientoDepositosForm() {
                                hover:border-blue-500 focus:border-blue-600 focus:bg-blue-100
                                focus:ring-4 focus:ring-blue-200"
                   >
-                    <div className="flex justify-center mb-1 text-blue-400">
-                      <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M2 4h2v16H2V4zm3 0h1v16H5V4zm2 0h2v16H7V4zm3 0h1v16h-1V4zm2 0h2v16h-2V4zm3 0h1v16h-1V4zm2 0h1v16h-1V4zm2 0h2v16h-2V4z"/>
-                      </svg>
-                    </div>
-                    <p className="text-blue-700 font-bold">Listo para escanear</p>
-                    <p className="text-gray-400 text-xs mt-1">Apunte el lector al código de barras</p>
+                    {validating ? (
+                      <>
+                        <div className="flex justify-center mb-2">
+                          <div className="w-7 h-7 border-3 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                        </div>
+                        <p className="text-blue-700 font-bold">Validando serie…</p>
+                        <p className="text-gray-400 text-xs mt-1">Consultando base de datos</p>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex justify-center mb-1 text-blue-400">
+                          <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M2 4h2v16H2V4zm3 0h1v16H5V4zm2 0h2v16H7V4zm3 0h1v16h-1V4zm2 0h2v16h-2V4zm3 0h1v16h-1V4zm2 0h1v16h-1V4zm2 0h2v16h-2V4z"/>
+                          </svg>
+                        </div>
+                        <p className="text-blue-700 font-bold">Listo para escanear</p>
+                        <p className="text-gray-400 text-xs mt-1">Apunte el lector al código de barras</p>
+                      </>
+                    )}
                   </div>
 
                   <div>
@@ -641,24 +725,27 @@ export function MovimientoDepositosForm() {
                       <input
                         type="text"
                         value={currentSlot.manualInput}
+                        disabled={validating}
                         onChange={e => setCurrentSlot(prev => ({ ...prev, manualInput: e.target.value }))}
                         onKeyDown={e => {
-                          if (e.key === 'Enter') {
+                          if (e.key === 'Enter' && currentSlot.articulo) {
                             e.preventDefault();
-                            addSerie(currentSlot.manualInput);
+                            addSerie(currentSlot.manualInput, currentSlot.articulo.cod_articu);
                             setCurrentSlot(prev => ({ ...prev, manualInput: '' }));
                           }
                         }}
                         placeholder="Escribir serie y presionar Enter…"
                         className="flex-1 border border-gray-300 rounded-xl px-4 py-2.5 text-base font-mono
-                                   focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                                   focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent
+                                   disabled:bg-gray-100 disabled:cursor-not-allowed"
                       />
                       <button
                         onClick={() => {
-                          addSerie(currentSlot.manualInput);
+                          if (!currentSlot.articulo) return;
+                          addSerie(currentSlot.manualInput, currentSlot.articulo.cod_articu);
                           setCurrentSlot(prev => ({ ...prev, manualInput: '' }));
                         }}
-                        disabled={currentSlot.manualInput.trim().length < 3}
+                        disabled={currentSlot.manualInput.trim().length < 3 || validating}
                         className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300
                                    disabled:cursor-not-allowed text-white font-bold rounded-xl
                                    text-sm transition-colors"
@@ -674,18 +761,33 @@ export function MovimientoDepositosForm() {
                         Series ingresadas ({currentSlot.series.length})
                       </span>
                       <div className="flex flex-wrap gap-2">
-                        {currentSlot.series.map(serie => (
-                          <div key={serie}
-                            className="flex items-center gap-1.5 bg-gray-100 hover:bg-gray-200
-                                       rounded-lg px-3 py-1.5 transition-colors">
-                            <span className="font-mono text-sm text-gray-700 tracking-wide">{serie}</span>
-                            <button
-                              onClick={() => removeCurrentSerie(serie)}
-                              className="text-gray-400 hover:text-red-500 text-lg leading-none transition-colors"
-                              title={`Eliminar ${serie}`}
-                            >×</button>
-                          </div>
-                        ))}
+                        {currentSlot.series.map(serie => {
+                          const isInvalid = invalidSeriesRef.current.has(
+                            (currentSlot.articulo?.cod_articu ?? '') + ':' + serie
+                          );
+                          return (
+                            <div key={serie}
+                              className={[
+                                'flex items-center gap-1.5 rounded-lg px-3 py-1.5 transition-colors',
+                                isInvalid
+                                  ? 'bg-red-100 hover:bg-red-200'
+                                  : 'bg-gray-100 hover:bg-gray-200',
+                              ].join(' ')}>
+                              {isInvalid && (
+                                <span className="text-red-500 font-bold text-xs leading-none">!</span>
+                              )}
+                              <span className={[
+                                'font-mono text-sm tracking-wide',
+                                isInvalid ? 'text-red-700' : 'text-gray-700',
+                              ].join(' ')}>{serie}</span>
+                              <button
+                                onClick={() => removeCurrentSerie(serie)}
+                                className="text-gray-400 hover:text-red-500 text-lg leading-none transition-colors"
+                                title={`Eliminar ${serie}`}
+                              >×</button>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -795,18 +897,31 @@ export function MovimientoDepositosForm() {
                         >×</button>
                       </div>
                       <div className="flex flex-wrap gap-1.5">
-                        {group.series.map(s => (
-                          <div key={s}
-                            className="flex items-center gap-1 bg-gray-100 hover:bg-gray-200
-                                       rounded-lg px-2.5 py-1 transition-colors">
-                            <span className="font-mono text-xs text-gray-600">{s}</span>
-                            <button
-                              onClick={() => removeConfirmedSerie(group.articulo.cod_articu, s)}
-                              className="text-gray-400 hover:text-red-500 text-sm leading-none transition-colors"
-                              title={`Eliminar ${s}`}
-                            >×</button>
-                          </div>
-                        ))}
+                        {group.series.map(s => {
+                          const isInvalid = invalidSeriesRef.current.has(group.articulo.cod_articu + ':' + s);
+                          return (
+                            <div key={s}
+                              className={[
+                                'flex items-center gap-1 rounded-lg px-2.5 py-1 transition-colors',
+                                isInvalid
+                                  ? 'bg-red-100 hover:bg-red-200'
+                                  : 'bg-gray-100 hover:bg-gray-200',
+                              ].join(' ')}>
+                              {isInvalid && (
+                                <span className="text-red-500 font-bold text-xs leading-none">!</span>
+                              )}
+                              <span className={[
+                                'font-mono text-xs',
+                                isInvalid ? 'text-red-700' : 'text-gray-600',
+                              ].join(' ')}>{s}</span>
+                              <button
+                                onClick={() => removeConfirmedSerie(group.articulo.cod_articu, s)}
+                                className="text-gray-400 hover:text-red-500 text-sm leading-none transition-colors"
+                                title={`Eliminar ${s}`}
+                              >×</button>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   ))}
@@ -828,18 +943,33 @@ export function MovimientoDepositosForm() {
                         </span>
                       </div>
                       <div className="flex flex-wrap gap-1.5">
-                        {currentSlot.series.map(s => (
-                          <div key={s}
-                            className="flex items-center gap-1 bg-blue-100 hover:bg-blue-200
-                                       rounded-lg px-2.5 py-1 transition-colors">
-                            <span className="font-mono text-xs text-blue-700">{s}</span>
-                            <button
-                              onClick={() => removeCurrentSerie(s)}
-                              className="text-blue-400 hover:text-red-500 text-sm leading-none transition-colors"
-                              title={`Eliminar ${s}`}
-                            >×</button>
-                          </div>
-                        ))}
+                        {currentSlot.series.map(s => {
+                          const isInvalid = invalidSeriesRef.current.has(
+                            (currentSlot.articulo?.cod_articu ?? '') + ':' + s
+                          );
+                          return (
+                            <div key={s}
+                              className={[
+                                'flex items-center gap-1 rounded-lg px-2.5 py-1 transition-colors',
+                                isInvalid
+                                  ? 'bg-red-100 hover:bg-red-200'
+                                  : 'bg-blue-100 hover:bg-blue-200',
+                              ].join(' ')}>
+                              {isInvalid && (
+                                <span className="text-red-500 font-bold text-xs leading-none">!</span>
+                              )}
+                              <span className={[
+                                'font-mono text-xs',
+                                isInvalid ? 'text-red-700' : 'text-blue-700',
+                              ].join(' ')}>{s}</span>
+                              <button
+                                onClick={() => removeCurrentSerie(s)}
+                                className="text-blue-400 hover:text-red-500 text-sm leading-none transition-colors"
+                                title={`Eliminar ${s}`}
+                              >×</button>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
