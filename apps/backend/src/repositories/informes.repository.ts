@@ -212,7 +212,7 @@ export async function obtenerDetalle(idSta14: number): Promise<ComprobanteDetall
           AND s7.NCOMP_IN_S = s20.NCOMP_IN_S
           AND s7.N_RENGL_S  = s20.N_RENGL_S
         WHERE s20.ID_STA14 = @id
-        ORDER BY s20.COD_ARTICU, s7.N_SERIE
+        ORDER BY cod_articu, n_serie
       `),
   ]);
 

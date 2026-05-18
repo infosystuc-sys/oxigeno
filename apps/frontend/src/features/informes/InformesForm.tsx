@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   fetchRecepciones,
   fetchRemitos,
@@ -49,18 +49,17 @@ function TipoIcon({ tipo }: { tipo: string }) {
 
 function DetallePanel({ idSta14 }: { idSta14: number }) {
   const [data,    setData]    = useState<ComprobanteDetalle | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
-  const loaded = useRef(false);
 
-  if (!loaded.current && !loading) {
-    loaded.current = true;
-    setLoading(true);
+  useEffect(() => {
+    let cancelled = false;
     fetchDetalle(idSta14)
-      .then(d => { setData(d); })
-      .catch(() => setError('Error al cargar detalle'))
-      .finally(() => setLoading(false));
-  }
+      .then(d  => { if (!cancelled) setData(d); })
+      .catch(() => { if (!cancelled) setError('Error al cargar detalle'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [idSta14]);
 
   if (loading) return (
     <div className="px-6 py-4 text-sm text-gray-400 animate-pulse">Cargando detalle…</div>
@@ -197,9 +196,8 @@ function ResultsTable<T extends { id_sta14: number }>({
         </thead>
         <tbody className="divide-y divide-gray-100">
           {rows.map(row => (
-            <>
+            <React.Fragment key={row.id_sta14}>
               <tr
-                key={row.id_sta14}
                 onClick={() => setExpandedId(prev => prev === row.id_sta14 ? null : row.id_sta14)}
                 className="hover:bg-blue-50 cursor-pointer transition-colors"
               >
@@ -213,13 +211,13 @@ function ResultsTable<T extends { id_sta14: number }>({
                 </td>
               </tr>
               {expandedId === row.id_sta14 && (
-                <tr key={`det-${row.id_sta14}`}>
+                <tr>
                   <td colSpan={headers.length + 1} className="p-0">
                     <DetallePanel idSta14={row.id_sta14} />
                   </td>
                 </tr>
               )}
-            </>
+            </React.Fragment>
           ))}
         </tbody>
       </table>
