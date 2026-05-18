@@ -8,6 +8,22 @@ export async function buscarClientes(search: string): Promise<Cliente[]> {
   return data;
 }
 
+export interface ValidacionSerie {
+  existe:      boolean;
+  cod_deposi?: string;
+}
+
+export async function validarSerie(
+  codArticu: string,
+  nSerie:    string,
+): Promise<ValidacionSerie> {
+  const { data } = await axios.get<ValidacionSerie>(
+    `${BASE}/remito-cliente/validar-serie`,
+    { params: { cod_articu: codArticu, n_serie: nSerie } },
+  );
+  return data;
+}
+
 export async function obtenerProximoRemito(): Promise<string> {
   const { data } = await axios.get<{ nro_comprobante: string }>(`${BASE}/remito-cliente/proximo`);
   return data.nro_comprobante;

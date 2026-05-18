@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   guardarRemitoCliente,
   obtenerProximoRemito,
+  validarSerie,
 } from '../repositories/remito-cliente.repository';
 
 const ItemSchema = z.object({
@@ -20,6 +21,23 @@ export async function getProximoRemito(_req: Request, res: Response): Promise<vo
   try {
     const nro_comprobante = await obtenerProximoRemito();
     res.json({ nro_comprobante });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Error interno';
+    res.status(500).json({ error: msg });
+  }
+}
+
+export async function getValidarSerie(req: Request, res: Response): Promise<void> {
+  const { cod_articu, n_serie } = req.query as { cod_articu?: string; n_serie?: string };
+
+  if (!cod_articu || !n_serie) {
+    res.status(400).json({ error: 'cod_articu y n_serie son requeridos' });
+    return;
+  }
+
+  try {
+    const resultado = await validarSerie(cod_articu.trim(), n_serie.trim());
+    res.json(resultado);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Error interno';
     res.status(500).json({ error: msg });

@@ -4,6 +4,7 @@ import {
   buscarClientes,
   guardarRemitoCliente,
   obtenerProximoRemito,
+  validarSerie,
 } from '../../api/clientes';
 import { obtenerGases } from '../../api/recepcion';
 import type {
@@ -118,9 +119,11 @@ export function RemitoClienteForm() {
   const allSeriesRef = useRef<Set<string>>(new Set());
   const scanZoneRef  = useRef<HTMLDivElement>(null);
 
-  const [saving,    setSaving]    = useState(false);
-  const [resultado, setResultado] = useState<RemitoClienteResponse | null>(null);
-  const [apiError,  setApiError]  = useState<string | null>(null);
+  const [saving,     setSaving]     = useState(false);
+  const [validating, setValidating] = useState(false);
+  const [resultado,  setResultado]  = useState<RemitoClienteResponse | null>(null);
+  const [apiError,   setApiError]   = useState<string | null>(null);
+  const validatingRef = useRef(false);
 
   // ── Carga inicial ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -185,14 +188,38 @@ export function RemitoClienteForm() {
     setCurrentSlot({ articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '' });
   }
 
-  const addSerie = useCallback((code: string) => {
+  const addSerie = useCallback(async (code: string, codArticu: string) => {
     const trimmed = code.trim();
     if (trimmed.length < 3) return;
+    if (validatingRef.current) return;       // evitar concurrencia
+
     if (allSeriesRef.current.has(trimmed)) {
       beep(); setTimeout(beep, 150);
       alert(`⚠️  La serie "${trimmed}" ya fue ingresada en este remito.`);
       return;
     }
+
+    // ── Validar en sta06 ──────────────────────────────────────────────────
+    validatingRef.current = true;
+    setValidating(true);
+    try {
+      const v = await validarSerie(codArticu, trimmed);
+      if (!v.existe) {
+        beep(); setTimeout(beep, 150);
+        alert(`❌  La serie "${trimmed}" no existe en stock para el artículo seleccionado.`);
+        return;
+      }
+      if (v.cod_deposi !== '30') {
+        alert(`⚠️  La serie "${trimmed}" está en el depósito ${v.cod_deposi}, no en el depósito 30. Se agrega de todos modos.`);
+      }
+    } catch {
+      alert(`Error al validar la serie "${trimmed}". Intente nuevamente.`);
+      return;
+    } finally {
+      validatingRef.current = false;
+      setValidating(false);
+    }
+
     beep();
     allSeriesRef.current.add(trimmed);
     setCurrentSlot(prev => ({ ...prev, series: [...prev.series, trimmed] }));
@@ -201,7 +228,7 @@ export function RemitoClienteForm() {
   const handleScan = useCallback(
     (code: string) => {
       if (!currentSlot.articulo) return;
-      addSerie(code);
+      addSerie(code, currentSlot.articulo.cod_articu);
     },
     [currentSlot.articulo, addSerie]
   );
@@ -514,18 +541,26 @@ export function RemitoClienteForm() {
                   <div
                     ref={scanZoneRef}
                     tabIndex={0}
-                    onClick={() => scanZoneRef.current?.focus()}
-                    className="border-2 border-dashed border-blue-400 rounded-xl p-4 text-center
-                               cursor-pointer select-none outline-none transition-colors bg-blue-50
-                               hover:border-blue-500 focus:border-blue-600 focus:bg-blue-100
-                               focus:ring-4 focus:ring-blue-200"
+                    onClick={() => !validating && scanZoneRef.current?.focus()}
+                    className={[
+                      'border-2 border-dashed rounded-xl p-4 text-center select-none outline-none transition-colors',
+                      validating
+                        ? 'border-yellow-300 bg-yellow-50 cursor-wait'
+                        : 'border-blue-400 bg-blue-50 cursor-pointer hover:border-blue-500 focus:border-blue-600 focus:bg-blue-100 focus:ring-4 focus:ring-blue-200',
+                    ].join(' ')}
                   >
-                    <div className="flex justify-center mb-1 text-blue-400">
-                      <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M2 4h2v16H2V4zm3 0h1v16H5V4zm2 0h2v16H7V4zm3 0h1v16h-1V4zm2 0h2v16h-2V4zm3 0h1v16h-1V4zm2 0h1v16h-1V4zm2 0h2v16h-2V4z"/>
-                      </svg>
+                    <div className={`flex justify-center mb-1 ${validating ? 'text-yellow-400' : 'text-blue-400'}`}>
+                      {validating ? (
+                        <div className="w-8 h-8 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M2 4h2v16H2V4zm3 0h1v16H5V4zm2 0h2v16H7V4zm3 0h1v16h-1V4zm2 0h2v16h-2V4zm3 0h1v16h-1V4zm2 0h1v16h-1V4zm2 0h2v16h-2V4z"/>
+                        </svg>
+                      )}
                     </div>
-                    <p className="text-blue-700 font-bold">Listo para escanear</p>
+                    <p className={`font-bold ${validating ? 'text-yellow-600' : 'text-blue-700'}`}>
+                      {validating ? 'Validando serie…' : 'Listo para escanear'}
+                    </p>
                     <p className="text-gray-400 text-xs mt-1">Apunte el lector al código de barras</p>
                   </div>
 
@@ -538,28 +573,33 @@ export function RemitoClienteForm() {
                         type="text"
                         value={currentSlot.manualInput}
                         onChange={e => setCurrentSlot(prev => ({ ...prev, manualInput: e.target.value }))}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') {
+                        disabled={validating}
+                        onKeyDown={async e => {
+                          if (e.key === 'Enter' && currentSlot.articulo) {
                             e.preventDefault();
-                            addSerie(currentSlot.manualInput);
+                            const val = currentSlot.manualInput;
                             setCurrentSlot(prev => ({ ...prev, manualInput: '' }));
+                            await addSerie(val, currentSlot.articulo!.cod_articu);
                           }
                         }}
                         placeholder="Escribir serie y presionar Enter…"
                         className="flex-1 border border-gray-300 rounded-xl px-4 py-2.5 text-base font-mono
-                                   focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                                   focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent
+                                   disabled:bg-gray-100 disabled:cursor-wait"
                       />
                       <button
-                        onClick={() => {
-                          addSerie(currentSlot.manualInput);
+                        onClick={async () => {
+                          if (!currentSlot.articulo) return;
+                          const val = currentSlot.manualInput;
                           setCurrentSlot(prev => ({ ...prev, manualInput: '' }));
+                          await addSerie(val, currentSlot.articulo!.cod_articu);
                         }}
-                        disabled={currentSlot.manualInput.trim().length < 3}
+                        disabled={currentSlot.manualInput.trim().length < 3 || validating}
                         className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300
                                    disabled:cursor-not-allowed text-white font-bold rounded-xl
                                    text-sm transition-colors"
                       >
-                        Agregar
+                        {validating ? '…' : 'Agregar'}
                       </button>
                     </div>
                   </div>

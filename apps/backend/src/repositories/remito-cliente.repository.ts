@@ -44,6 +44,34 @@ export async function obtenerProximoRemito(): Promise<string> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Consulta pública: validar serie en sta06
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ValidacionSerieResult {
+  existe:     boolean;
+  cod_deposi?: string;
+}
+
+export async function validarSerie(
+  codArticu: string,
+  nSerie:    string,
+): Promise<ValidacionSerieResult> {
+  const pool = await getPool();
+  const res  = await pool.request()
+    .input('cod_articu', sql.VarChar(15), codArticu)
+    .input('n_serie',    sql.VarChar(30), nSerie)
+    .query<{ COD_DEPOSI: string }>(`
+      SELECT COD_DEPOSI
+      FROM sta06 WITH (NOLOCK)
+      WHERE COD_ARTICU = @cod_articu
+        AND N_SERIE    = @n_serie
+    `);
+
+  if (res.recordset.length === 0) return { existe: false };
+  return { existe: true, cod_deposi: res.recordset[0].COD_DEPOSI };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Paso 1a: consultar STA11
 // ─────────────────────────────────────────────────────────────────────────────
 
