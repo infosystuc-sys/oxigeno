@@ -11,6 +11,7 @@ import type {
   PostRecepcionPayload,
   RecepcionResponse,
 } from '@oxigeno/shared-types';
+import { imprimirComprobante, type ComprobantePrintData } from '../../utils/imprimirComprobante';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -55,10 +56,12 @@ function SuccessScreen({
   resultado,
   totalSeries,
   onNuevo,
+  onImprimir,
 }: {
   resultado:   RecepcionResponse;
   totalSeries: number;
   onNuevo:     () => void;
+  onImprimir:  () => void;
 }) {
   return (
     <div className="min-h-screen bg-gray-100 flex items-center justify-center p-6">
@@ -84,6 +87,19 @@ function SuccessScreen({
           <span className="font-bold text-gray-700">{totalSeries}</span>{' '}
           {totalSeries === 1 ? 'cilindro ingresado' : 'cilindros ingresados'}
         </p>
+
+        <button
+          onClick={onImprimir}
+          className="w-full py-3 mb-3 bg-gray-100 hover:bg-gray-200 active:bg-gray-300
+                     text-gray-700 text-base font-semibold rounded-xl transition-colors
+                     flex items-center justify-center gap-2"
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+          </svg>
+          Imprimir comprobante
+        </button>
 
         <button
           onClick={onNuevo}
@@ -115,13 +131,18 @@ export function RecepcionForm() {
     articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '',
   });
   const [confirmedGroups, setConfirmedGroups] = useState<ConfirmedGroup[]>([]);
-  const allSeriesRef = useRef<Set<string>>(new Set());
-  const scanZoneRef  = useRef<HTMLDivElement>(null);
+  const allSeriesRef  = useRef<Set<string>>(new Set());
+  const scanZoneRef   = useRef<HTMLDivElement>(null);
+  const fechaRef      = useRef<HTMLInputElement>(null);
+  const remitoRef     = useRef<HTMLInputElement>(null);
+  const provSearchRef = useRef<HTMLInputElement>(null);
+  const gasSearchRef  = useRef<HTMLInputElement>(null);
 
   // Estado de guardado / resultado
   const [saving,    setSaving]    = useState(false);
   const [resultado, setResultado] = useState<RecepcionResponse | null>(null);
   const [apiError,  setApiError]  = useState<string | null>(null);
+  const [printData, setPrintData] = useState<ComprobantePrintData | null>(null);
 
   // ── Carga inicial ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -265,6 +286,21 @@ export function RecepcionForm() {
 
     try {
       const res = await guardarRecepcion(payload);
+      const pd: ComprobantePrintData = {
+        tipo:            'recepcion',
+        nro_comprobante: res.nro_comprobante,
+        fecha,
+        entidad_cod:     proveedor.cod_provee,
+        entidad_nombre:  proveedor.NOM_PROVEE,
+        nro_remito_prov: remito.trim(),
+        items:           allGroups.map(g => ({
+          cod_articu: g.articulo.cod_articu,
+          descrip:    g.articulo.descrip,
+          series:     g.series,
+        })),
+      };
+      setPrintData(pd);
+      imprimirComprobante(pd);
       setResultado(res);
     } catch (err: unknown) {
       const msg =
@@ -289,11 +325,19 @@ export function RecepcionForm() {
     allSeriesRef.current = new Set();
     setResultado(null);
     setApiError(null);
+    setPrintData(null);
   }
 
   // ── Pantalla de éxito ─────────────────────────────────────────────────────
   if (resultado?.success) {
-    return <SuccessScreen resultado={resultado} totalSeries={totalSeries} onNuevo={handleNuevo} />;
+    return (
+      <SuccessScreen
+        resultado={resultado}
+        totalSeries={totalSeries}
+        onNuevo={handleNuevo}
+        onImprimir={() => printData && imprimirComprobante(printData)}
+      />
+    );
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -371,8 +415,10 @@ export function RecepcionForm() {
                   </label>
                   <input
                     type="date"
+                    ref={fechaRef}
                     value={fecha}
                     onChange={e => setFecha(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); remitoRef.current?.focus(); } }}
                     className="w-full border border-gray-300 rounded-xl px-4 py-3 text-base
                                focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
                   />
@@ -386,6 +432,7 @@ export function RecepcionForm() {
                 </label>
                 <input
                   type="text"
+                  ref={remitoRef}
                   value={remito}
                   maxLength={14}
                   onChange={e => {
@@ -400,6 +447,7 @@ export function RecepcionForm() {
                     }
                     setRemito(filtered);
                   }}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); provSearchRef.current?.focus(); } }}
                   placeholder="Ej: R00010012345"
                   className="w-full border border-gray-300 rounded-xl px-4 py-3 text-lg
                              focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
@@ -428,10 +476,24 @@ export function RecepcionForm() {
                   <div className="relative">
                     <input
                       type="text"
+                      ref={provSearchRef}
                       value={provSearch}
                       onChange={e => setProvSearch(e.target.value)}
                       onFocus={() => { if (provResults.length > 0) setShowDropdown(true); }}
                       onBlur={() => setTimeout(() => setShowDropdown(false), 200)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          if (provResults.length > 0) {
+                            setProveedor(provResults[0]);
+                            setShowDropdown(false);
+                            setProvSearch('');
+                            setTimeout(() => gasSearchRef.current?.focus(), 50);
+                          } else {
+                            gasSearchRef.current?.focus();
+                          }
+                        }
+                      }}
                       placeholder="Buscar por nombre… (mín. 2 caracteres)"
                       className="w-full border border-gray-300 rounded-xl px-4 py-3 text-base
                                  focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
@@ -500,10 +562,23 @@ export function RecepcionForm() {
                   <div className="relative">
                     <input
                       type="text"
+                      ref={gasSearchRef}
                       value={currentSlot.gasSearch}
                       onChange={e => setCurrentSlot(prev => ({ ...prev, gasSearch: e.target.value, showDropdown: true }))}
                       onFocus={() => setCurrentSlot(prev => ({ ...prev, showDropdown: true }))}
                       onBlur={() => setTimeout(() => setCurrentSlot(prev => ({ ...prev, showDropdown: false })), 200)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const filtered = currentSlot.gasSearch
+                            ? gases.filter(g =>
+                                g.descrip.toLowerCase().includes(currentSlot.gasSearch.toLowerCase()) ||
+                                g.cod_articu.toLowerCase().includes(currentSlot.gasSearch.toLowerCase())
+                              )
+                            : gases;
+                          if (filtered.length > 0) selectGas(filtered[0]);
+                        }
+                      }}
                       placeholder="Buscar tipo de gas…"
                       className="w-full border border-gray-300 rounded-xl px-4 py-3 text-base
                                  focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"

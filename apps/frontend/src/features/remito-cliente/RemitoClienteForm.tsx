@@ -13,6 +13,7 @@ import type {
   PostRemitoClientePayload,
   RemitoClienteResponse,
 } from '@oxigeno/shared-types';
+import { imprimirComprobante, type ComprobantePrintData } from '../../utils/imprimirComprobante';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -57,10 +58,12 @@ function SuccessScreen({
   resultado,
   totalSeries,
   onNuevo,
+  onImprimir,
 }: {
   resultado:   RemitoClienteResponse;
   totalSeries: number;
   onNuevo:     () => void;
+  onImprimir:  () => void;
 }) {
   return (
     <div className="min-h-screen bg-gray-100 flex items-center justify-center p-6">
@@ -86,6 +89,19 @@ function SuccessScreen({
           <span className="font-bold text-gray-700">{totalSeries}</span>{' '}
           {totalSeries === 1 ? 'cilindro ingresado' : 'cilindros ingresados'}
         </p>
+
+        <button
+          onClick={onImprimir}
+          className="w-full py-3 mb-3 bg-gray-100 hover:bg-gray-200 active:bg-gray-300
+                     text-gray-700 text-base font-semibold rounded-xl transition-colors
+                     flex items-center justify-center gap-2"
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+          </svg>
+          Imprimir comprobante
+        </button>
 
         <button
           onClick={onNuevo}
@@ -116,13 +132,19 @@ export function RemitoClienteForm() {
     articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '',
   });
   const [confirmedGroups, setConfirmedGroups] = useState<ConfirmedGroup[]>([]);
-  const allSeriesRef = useRef<Set<string>>(new Set());
-  const scanZoneRef  = useRef<HTMLDivElement>(null);
+  const allSeriesRef     = useRef<Set<string>>(new Set());
+  const invalidSeriesRef = useRef<Set<string>>(new Set());
+  const scanZoneRef      = useRef<HTMLDivElement>(null);
+  const fechaRef         = useRef<HTMLInputElement>(null);
+  const cliSearchRef     = useRef<HTMLInputElement>(null);
+  const gasSearchRef     = useRef<HTMLInputElement>(null);
 
-  const [saving,     setSaving]     = useState(false);
-  const [validating, setValidating] = useState(false);
-  const [resultado,  setResultado]  = useState<RemitoClienteResponse | null>(null);
-  const [apiError,   setApiError]   = useState<string | null>(null);
+  const [saving,           setSaving]           = useState(false);
+  const [validating,       setValidating]       = useState(false);
+  const [hasInvalidSeries, setHasInvalidSeries] = useState(false);
+  const [resultado,        setResultado]        = useState<RemitoClienteResponse | null>(null);
+  const [apiError,         setApiError]         = useState<string | null>(null);
+  const [printData,        setPrintData]        = useState<ComprobantePrintData | null>(null);
   const validatingRef = useRef(false);
 
   // ── Carga inicial ────────────────────────────────────────────────────────
@@ -184,7 +206,12 @@ export function RemitoClienteForm() {
   }
 
   function clearCurrentSlot() {
-    currentSlot.series.forEach(s => allSeriesRef.current.delete(s));
+    const cod = currentSlot.articulo?.cod_articu ?? '';
+    currentSlot.series.forEach(s => {
+      allSeriesRef.current.delete(cod + ':' + s);
+      invalidSeriesRef.current.delete(cod + ':' + s);
+    });
+    setHasInvalidSeries(invalidSeriesRef.current.size > 0);
     setCurrentSlot({ articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '' });
   }
 
@@ -193,23 +220,23 @@ export function RemitoClienteForm() {
     if (trimmed.length < 3) return;
     if (validatingRef.current) return;       // evitar concurrencia
 
-    if (allSeriesRef.current.has(trimmed)) {
+    const key = codArticu + ':' + trimmed;
+    if (allSeriesRef.current.has(key)) {
       beep(); setTimeout(beep, 150);
-      alert(`⚠️  La serie "${trimmed}" ya fue ingresada en este remito.`);
+      alert(`⚠️  La serie "${trimmed}" ya fue ingresada para este artículo en este remito.`);
       return;
     }
 
     // ── Validar en sta06 ──────────────────────────────────────────────────
     validatingRef.current = true;
     setValidating(true);
+    let serieInvalida = false;
     try {
       const v = await validarSerie(codArticu, trimmed);
       if (!v.existe) {
-        beep(); setTimeout(beep, 150);
-        alert(`❌  La serie "${trimmed}" no existe en stock para el artículo seleccionado.`);
-        return;
-      }
-      if (v.cod_deposi !== '30') {
+        serieInvalida = true;
+        // No bloqueamos: se agrega en rojo
+      } else if (v.cod_deposi !== '30') {
         alert(`⚠️  La serie "${trimmed}" está en el depósito ${v.cod_deposi}, no en el depósito 30. Se agrega de todos modos.`);
       }
     } catch {
@@ -220,8 +247,13 @@ export function RemitoClienteForm() {
       setValidating(false);
     }
 
+    if (serieInvalida) {
+      invalidSeriesRef.current.add(key);
+      setHasInvalidSeries(true);
+    }
+
     beep();
-    allSeriesRef.current.add(trimmed);
+    allSeriesRef.current.add(key);
     setCurrentSlot(prev => ({ ...prev, series: [...prev.series, trimmed] }));
   }, []);
 
@@ -240,12 +272,18 @@ export function RemitoClienteForm() {
   const canSave        = !!cliente && totalSeries > 0 && !saving && !nroCompLoading;
 
   function removeCurrentSerie(serie: string) {
-    allSeriesRef.current.delete(serie);
+    const key = (currentSlot.articulo?.cod_articu ?? '') + ':' + serie;
+    allSeriesRef.current.delete(key);
+    invalidSeriesRef.current.delete(key);
+    setHasInvalidSeries(invalidSeriesRef.current.size > 0);
     setCurrentSlot(prev => ({ ...prev, series: prev.series.filter(s => s !== serie) }));
   }
 
   function removeConfirmedSerie(codArticu: string, serie: string) {
-    allSeriesRef.current.delete(serie);
+    const key = codArticu + ':' + serie;
+    allSeriesRef.current.delete(key);
+    invalidSeriesRef.current.delete(key);
+    setHasInvalidSeries(invalidSeriesRef.current.size > 0);
     setConfirmedGroups(prev =>
       prev
         .map(g => g.articulo.cod_articu === codArticu
@@ -257,15 +295,27 @@ export function RemitoClienteForm() {
   }
 
   function removeConfirmedGroup(codArticu: string) {
-    setConfirmedGroups(prev => {
-      const group = prev.find(g => g.articulo.cod_articu === codArticu);
-      if (group) group.series.forEach(s => allSeriesRef.current.delete(s));
-      return prev.filter(g => g.articulo.cod_articu !== codArticu);
-    });
+    const group = confirmedGroups.find(g => g.articulo.cod_articu === codArticu);
+    if (group) {
+      group.series.forEach(s => {
+        allSeriesRef.current.delete(codArticu + ':' + s);
+        invalidSeriesRef.current.delete(codArticu + ':' + s);
+      });
+      setHasInvalidSeries(invalidSeriesRef.current.size > 0);
+    }
+    setConfirmedGroups(prev => prev.filter(g => g.articulo.cod_articu !== codArticu));
   }
 
   async function handleGuardar() {
     if (!canSave || !cliente) return;
+
+    if (hasInvalidSeries) {
+      const ok = window.confirm(
+        '⚠️ Hay series que no están registradas en stock (marcadas en rojo).\n\n¿Desea continuar y guardar el remito de todos modos?'
+      );
+      if (!ok) return;
+    }
+
     setSaving(true);
     setApiError(null);
 
@@ -288,6 +338,20 @@ export function RemitoClienteForm() {
 
     try {
       const res = await guardarRemitoCliente(payload);
+      const pd: ComprobantePrintData = {
+        tipo:            'remito-cliente',
+        nro_comprobante: res.nro_comprobante,
+        fecha,
+        entidad_cod:     cliente.cod_client,
+        entidad_nombre:  cliente.RAZON_SOCI,
+        items:           allGroups.map(g => ({
+          cod_articu: g.articulo.cod_articu,
+          descrip:    g.articulo.descrip,
+          series:     g.series,
+        })),
+      };
+      setPrintData(pd);
+      imprimirComprobante(pd);
       setResultado(res);
     } catch (err: unknown) {
       const msg =
@@ -308,8 +372,11 @@ export function RemitoClienteForm() {
     setCurrentSlot({ articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '' });
     setConfirmedGroups([]);
     allSeriesRef.current = new Set();
+    invalidSeriesRef.current = new Set();
+    setHasInvalidSeries(false);
     setResultado(null);
     setApiError(null);
+    setPrintData(null);
     // Recargar el próximo comprobante
     setNroCompLoading(true);
     obtenerProximoRemito()
@@ -319,7 +386,14 @@ export function RemitoClienteForm() {
   }
 
   if (resultado?.success) {
-    return <SuccessScreen resultado={resultado} totalSeries={totalSeries} onNuevo={handleNuevo} />;
+    return (
+      <SuccessScreen
+        resultado={resultado}
+        totalSeries={totalSeries}
+        onNuevo={handleNuevo}
+        onImprimir={() => printData && imprimirComprobante(printData)}
+      />
+    );
   }
 
   return (
@@ -352,6 +426,19 @@ export function RemitoClienteForm() {
                 </div>
                 <button onClick={() => setApiError(null)}
                   className="text-red-400 hover:text-red-600 text-xl leading-none mt-0.5">×</button>
+              </div>
+            )}
+
+            {/* Banner: series inválidas */}
+            {hasInvalidSeries && (
+              <div className="flex items-start gap-3 bg-orange-50 border border-orange-400 text-orange-800 rounded-xl px-4 py-3">
+                <span className="text-2xl leading-none mt-0.5">⚠</span>
+                <div className="flex-1">
+                  <p className="font-semibold">Series no encontradas en stock</p>
+                  <p className="text-sm mt-0.5">
+                    Hay series marcadas en rojo que no están registradas en sta06. Revíselas antes de guardar.
+                  </p>
+                </div>
               </div>
             )}
 
@@ -388,8 +475,10 @@ export function RemitoClienteForm() {
                   </label>
                   <input
                     type="date"
+                    ref={fechaRef}
                     value={fecha}
                     onChange={e => setFecha(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); cliSearchRef.current?.focus(); } }}
                     className="w-full border border-gray-300 rounded-xl px-4 py-3 text-base
                                focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
                   />
@@ -418,10 +507,24 @@ export function RemitoClienteForm() {
                   <div className="relative">
                     <input
                       type="text"
+                      ref={cliSearchRef}
                       value={cliSearch}
                       onChange={e => setCliSearch(e.target.value)}
                       onFocus={() => { if (cliResults.length > 0) setShowDropdown(true); }}
                       onBlur={() => setTimeout(() => setShowDropdown(false), 200)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          if (cliResults.length > 0) {
+                            setCliente(cliResults[0]);
+                            setShowDropdown(false);
+                            setCliSearch('');
+                            setTimeout(() => gasSearchRef.current?.focus(), 50);
+                          } else {
+                            gasSearchRef.current?.focus();
+                          }
+                        }
+                      }}
                       placeholder="Buscar por nombre… (mín. 2 caracteres)"
                       className="w-full border border-gray-300 rounded-xl px-4 py-3 text-base
                                  focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
@@ -490,10 +593,23 @@ export function RemitoClienteForm() {
                   <div className="relative">
                     <input
                       type="text"
+                      ref={gasSearchRef}
                       value={currentSlot.gasSearch}
                       onChange={e => setCurrentSlot(prev => ({ ...prev, gasSearch: e.target.value, showDropdown: true }))}
                       onFocus={() => setCurrentSlot(prev => ({ ...prev, showDropdown: true }))}
                       onBlur={() => setTimeout(() => setCurrentSlot(prev => ({ ...prev, showDropdown: false })), 200)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const filtered = currentSlot.gasSearch
+                            ? gases.filter(g =>
+                                g.descrip.toLowerCase().includes(currentSlot.gasSearch.toLowerCase()) ||
+                                g.cod_articu.toLowerCase().includes(currentSlot.gasSearch.toLowerCase())
+                              )
+                            : gases;
+                          if (filtered.length > 0) selectGas(filtered[0]);
+                        }
+                      }}
                       placeholder="Buscar tipo de gas…"
                       className="w-full border border-gray-300 rounded-xl px-4 py-3 text-base
                                  focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
@@ -610,18 +726,27 @@ export function RemitoClienteForm() {
                         Series ingresadas ({currentSlot.series.length})
                       </span>
                       <div className="flex flex-wrap gap-2">
-                        {currentSlot.series.map(serie => (
-                          <div key={serie}
-                            className="flex items-center gap-1.5 bg-gray-100 hover:bg-gray-200
-                                       rounded-lg px-3 py-1.5 transition-colors">
-                            <span className="font-mono text-sm text-gray-700 tracking-wide">{serie}</span>
-                            <button
-                              onClick={() => removeCurrentSerie(serie)}
-                              className="text-gray-400 hover:text-red-500 text-lg leading-none transition-colors"
-                              title={`Eliminar ${serie}`}
-                            >×</button>
-                          </div>
-                        ))}
+                        {currentSlot.series.map(serie => {
+                          const inv = invalidSeriesRef.current.has((currentSlot.articulo?.cod_articu ?? '') + ':' + serie);
+                          return (
+                            <div key={serie}
+                              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 transition-colors ${
+                                inv ? 'bg-red-100 hover:bg-red-200' : 'bg-gray-100 hover:bg-gray-200'
+                              }`}>
+                              {inv && <span className="text-red-500 text-xs font-bold leading-none">!</span>}
+                              <span className={`font-mono text-sm tracking-wide ${inv ? 'text-red-700' : 'text-gray-700'}`}>
+                                {serie}
+                              </span>
+                              <button
+                                onClick={() => removeCurrentSerie(serie)}
+                                className={`text-lg leading-none transition-colors ${
+                                  inv ? 'text-red-400 hover:text-red-600' : 'text-gray-400 hover:text-red-500'
+                                }`}
+                                title={`Eliminar ${serie}`}
+                              >×</button>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -700,18 +825,23 @@ export function RemitoClienteForm() {
                         >×</button>
                       </div>
                       <div className="flex flex-wrap gap-1.5">
-                        {group.series.map(s => (
-                          <div key={s}
-                            className="flex items-center gap-1 bg-gray-100 hover:bg-gray-200
-                                       rounded-lg px-2.5 py-1 transition-colors">
-                            <span className="font-mono text-xs text-gray-600">{s}</span>
-                            <button
-                              onClick={() => removeConfirmedSerie(group.articulo.cod_articu, s)}
-                              className="text-gray-400 hover:text-red-500 text-sm leading-none transition-colors"
-                              title={`Eliminar ${s}`}
-                            >×</button>
-                          </div>
-                        ))}
+                        {group.series.map(s => {
+                          const inv = invalidSeriesRef.current.has(group.articulo.cod_articu + ':' + s);
+                          return (
+                            <div key={s}
+                              className={`flex items-center gap-1 rounded-lg px-2.5 py-1 transition-colors ${
+                                inv ? 'bg-red-100 hover:bg-red-200' : 'bg-gray-100 hover:bg-gray-200'
+                              }`}>
+                              {inv && <span className="text-red-500 text-[10px] font-bold leading-none">!</span>}
+                              <span className={`font-mono text-xs ${inv ? 'text-red-700' : 'text-gray-600'}`}>{s}</span>
+                              <button
+                                onClick={() => removeConfirmedSerie(group.articulo.cod_articu, s)}
+                                className="text-gray-400 hover:text-red-500 text-sm leading-none transition-colors"
+                                title={`Eliminar ${s}`}
+                              >×</button>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   ))}
@@ -733,18 +863,23 @@ export function RemitoClienteForm() {
                         </span>
                       </div>
                       <div className="flex flex-wrap gap-1.5">
-                        {currentSlot.series.map(s => (
-                          <div key={s}
-                            className="flex items-center gap-1 bg-blue-100 hover:bg-blue-200
-                                       rounded-lg px-2.5 py-1 transition-colors">
-                            <span className="font-mono text-xs text-blue-700">{s}</span>
-                            <button
-                              onClick={() => removeCurrentSerie(s)}
-                              className="text-blue-400 hover:text-red-500 text-sm leading-none transition-colors"
-                              title={`Eliminar ${s}`}
-                            >×</button>
-                          </div>
-                        ))}
+                        {currentSlot.series.map(s => {
+                          const inv = invalidSeriesRef.current.has((currentSlot.articulo?.cod_articu ?? '') + ':' + s);
+                          return (
+                            <div key={s}
+                              className={`flex items-center gap-1 rounded-lg px-2.5 py-1 transition-colors ${
+                                inv ? 'bg-red-100 hover:bg-red-200' : 'bg-blue-100 hover:bg-blue-200'
+                              }`}>
+                              {inv && <span className="text-red-500 text-[10px] font-bold leading-none">!</span>}
+                              <span className={`font-mono text-xs ${inv ? 'text-red-700' : 'text-blue-700'}`}>{s}</span>
+                              <button
+                                onClick={() => removeCurrentSerie(s)}
+                                className="text-blue-400 hover:text-red-500 text-sm leading-none transition-colors"
+                                title={`Eliminar ${s}`}
+                              >×</button>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}

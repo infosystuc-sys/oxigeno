@@ -52,8 +52,9 @@ export async function postRemitoCliente(req: Request, res: Response): Promise<vo
     return;
   }
 
-  const allSeries  = parsed.data.items.flatMap(i => i.series);
-  const duplicadas = allSeries.filter((s, i) => allSeries.indexOf(s) !== i);
+  // Unicidad por cod_articu + serie (la misma serie puede existir para artículos distintos)
+  const allKeys    = parsed.data.items.flatMap(i => i.series.map(s => `${i.cod_articu}:${s}`));
+  const duplicadas = allKeys.filter((k, i) => allKeys.indexOf(k) !== i);
   if (duplicadas.length > 0) {
     res.status(400).json({ error: 'Series duplicadas en el payload', duplicadas: [...new Set(duplicadas)] });
     return;
