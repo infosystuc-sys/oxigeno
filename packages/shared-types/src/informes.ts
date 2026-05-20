@@ -56,6 +56,7 @@ export interface MovimientoSerie {
   tipo_movimiento:  string;
   fecha:            string;
   entidad_cod:      string;
+  entidad_nombre:   string;
   cod_deposi:       string;
   deposito_nombre:  string;
 }

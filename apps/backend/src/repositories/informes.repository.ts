@@ -267,20 +267,29 @@ export async function trazabilidadSerie(nSerie: string): Promise<TrazabilidadSer
         RTRIM(s7.COD_ARTICU)                                           AS cod_articu,
         RTRIM(s14.N_COMP)                                              AS n_comp,
         CASE
-          WHEN s14.N_COMP LIKE ' 00000%' THEN 'Recepción'
-          WHEN s14.N_COMP LIKE 'R00009%' THEN 'Remito a Cliente'
-          WHEN s14.N_COMP LIKE ' 90003%' THEN 'Movimiento entre Depósitos'
+          WHEN RTRIM(s14.TCOMP_IN_S) = 'RP' THEN 'Recepción'
+          WHEN RTRIM(s14.TCOMP_IN_S) = 'RE' THEN 'Remito a Cliente'
+          WHEN RTRIM(s14.TCOMP_IN_S) = 'TI' THEN 'Movimiento entre Depósitos'
           ELSE 'Otro'
         END                                                            AS tipo_movimiento,
         CONVERT(VARCHAR(10), s14.FECHA_INGRESO, 23)                    AS fecha,
         RTRIM(s14.COD_PRO_CL)                                         AS entidad_cod,
+        CASE
+          WHEN RTRIM(s14.TCOMP_IN_S) = 'RP' THEN ISNULL(RTRIM(prov.NOM_PROVEE), '')
+          WHEN RTRIM(s14.TCOMP_IN_S) = 'RE' THEN ISNULL(RTRIM(cli.RAZON_SOCI), '')
+          ELSE ''
+        END                                                            AS entidad_nombre,
         RTRIM(s7.COD_DEPOSI)                                          AS cod_deposi,
         ISNULL(RTRIM(dep.NOMBRE_SUC), RTRIM(s7.COD_DEPOSI))           AS deposito_nombre
       FROM STA07 s7 WITH (NOLOCK)
       JOIN STA14 s14 WITH (NOLOCK)
         ON  s14.TCOMP_IN_S = s7.TCOMP_IN_S
         AND s14.NCOMP_IN_S = s7.NCOMP_IN_S
-      LEFT JOIN STA22 dep WITH (NOLOCK) ON RTRIM(dep.COD_SUCURS) = RTRIM(s7.COD_DEPOSI)
+      LEFT JOIN STA22 dep  WITH (NOLOCK) ON RTRIM(dep.COD_SUCURS)  = RTRIM(s7.COD_DEPOSI)
+      LEFT JOIN cpa01 prov WITH (NOLOCK) ON RTRIM(prov.COD_PROVEE) = RTRIM(s14.COD_PRO_CL)
+                                        AND RTRIM(s14.TCOMP_IN_S)  = 'RP'
+      LEFT JOIN gva14 cli  WITH (NOLOCK) ON RTRIM(cli.COD_CLIENT)  = RTRIM(s14.COD_PRO_CL)
+                                        AND RTRIM(s14.TCOMP_IN_S)  = 'RE'
       WHERE RTRIM(s7.N_SERIE) = @serie
       ORDER BY s7.COD_ARTICU, s14.FECHA_INGRESO ASC, s7.N_RENGL_S ASC
     `);
@@ -294,6 +303,7 @@ export async function trazabilidadSerie(nSerie: string): Promise<TrazabilidadSer
       tipo_movimiento: row.tipo_movimiento,
       fecha:           row.fecha,
       entidad_cod:     row.entidad_cod,
+      entidad_nombre:  row.entidad_nombre,
       cod_deposi:      row.cod_deposi,
       deposito_nombre: row.deposito_nombre,
     });

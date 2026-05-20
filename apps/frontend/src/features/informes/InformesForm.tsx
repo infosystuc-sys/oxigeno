@@ -637,9 +637,12 @@ function TabTrazabilidad() {
                                 <span className="font-semibold text-gray-700">{mov.deposito_nombre}</span>
                                 <span className="font-mono text-xs text-gray-400">({mov.cod_deposi})</span>
                               </div>
-                              {mov.entidad_cod && (
-                                <p className="text-xs text-gray-400 mt-0.5 ml-6">
-                                  Entidad: <span className="font-mono">{mov.entidad_cod}</span>
+                              {(mov.entidad_nombre || mov.entidad_cod) && (
+                                <p className="text-xs text-gray-500 mt-0.5 ml-6">
+                                  {mov.entidad_nombre
+                                    ? <><span className="font-semibold">{mov.entidad_nombre}</span> <span className="font-mono text-gray-400">({mov.entidad_cod})</span></>
+                                    : <span className="font-mono">{mov.entidad_cod}</span>
+                                  }
                                 </p>
                               )}
                             </div>
