@@ -12,7 +12,7 @@ import type {
 // ─── Discriminadores de tipo por prefijo de N_COMP ───────────────────────────
 // Recepción:              N_COMP LIKE ' 00000%'  (espacio + 00000)
 // Remito a cliente:       N_COMP LIKE 'R00009%'
-// Movimiento depósitos:   N_COMP LIKE 'R00003%'
+// Transferencia depósitos: N_COMP LIKE ' 90003%'  (TCOMP_IN_S='TI')
 
 // ─── Recepciones ─────────────────────────────────────────────────────────────
 
@@ -159,7 +159,7 @@ export async function listarMovimientos(opts: {
     LEFT JOIN STA07 s7  WITH (NOLOCK)
       ON  s7.TCOMP_IN_S = s14.TCOMP_IN_S
       AND s7.NCOMP_IN_S = s14.NCOMP_IN_S
-    WHERE s14.N_COMP LIKE 'R00003%'
+    WHERE s14.N_COMP LIKE ' 90003%'
       AND (@fecha_desde  IS NULL OR CAST(s14.FECHA_INGRESO AS DATE) >= @fecha_desde)
       AND (@fecha_hasta  IS NULL OR CAST(s14.FECHA_INGRESO AS DATE) <= @fecha_hasta)
       AND (@cod_deposito IS NULL
@@ -265,7 +265,7 @@ export async function trazabilidadSerie(nSerie: string): Promise<TrazabilidadSer
           CASE
             WHEN s14.N_COMP LIKE ' 00000%' THEN 'Recepción'
             WHEN s14.N_COMP LIKE 'R00009%' THEN 'Remito a Cliente'
-            WHEN s14.N_COMP LIKE 'R00003%' THEN 'Movimiento entre Depósitos'
+            WHEN s14.N_COMP LIKE ' 90003%' THEN 'Movimiento entre Depósitos'
             ELSE 'Otro'
           END                                                          AS tipo_movimiento,
           CONVERT(VARCHAR(10), s14.FECHA_INGRESO, 23)                  AS fecha,

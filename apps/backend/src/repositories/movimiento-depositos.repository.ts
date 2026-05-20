@@ -4,12 +4,12 @@
  * Flujo:
  *  1. Consultar STA11 y STA_ARTICULO_UNIDAD_COMPRA por artículo (fuera de tx)
  *  2. Iniciar transacción
- *  3. Leer sta17.PROXIMO (TALONARIO=3) con UPDLOCK → nComp = 'R00003' + PROXIMO
- *  4. Calcular NCOMP_IN_S: MAX(STA14.NCOMP_IN_S WHERE TCOMP_IN_S='RP') + 1
- *  5. INSERT sta14 (un solo encabezado)
+ *  3. Leer sta17.PROXIMO (TALONARIO=3) con UPDLOCK → nComp = ' 90003' + PROXIMO
+ *  4. Calcular NCOMP_IN_S: MAX(STA14.NCOMP_IN_S WHERE TCOMP_IN_S='TI') + 1
+ *  5. INSERT sta14 (TCOMP_IN_S='TI', T_COMP='TRA', COD_DEPOSI='')
  *  6. Por cada artículo → DOS renglones en sta20:
- *       renglón impar  → TIPO_MOV='S', COD_DEPOSI=origen
- *       renglón par    → TIPO_MOV='E', COD_DEPOSI=destino
+ *       renglón impar  → TIPO_MOV='E', COD_DEPOSI=origen, DEPOSI_DDE=destino
+ *       renglón par    → TIPO_MOV='S', COD_DEPOSI=destino, DEPOSI_DDE=origen
  *     Por cada serie:
  *       UPSERT sta06  → COD_DEPOSI = destino
  *       INSERT sta07 para renglón salida  (COD_DEPOSI=origen)
@@ -24,11 +24,11 @@ import type {
   Deposito,
 } from '@oxigeno/shared-types';
 
-const TCOMP      = 'RP';
-const TCOMP_EXT  = 'REM';
-const ESTADO_MOV = 'P';
+const TCOMP      = 'TI';
+const TCOMP_EXT  = 'TRA';
+const ESTADO_MOV = '';
 const TALONARIO  = 3;
-const PREFIX     = 'R00003';
+const PREFIX     = ' 90003';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Consulta pública: buscar depósitos en sta22
@@ -193,13 +193,13 @@ async function insertarEncabezado(
   req.input('h_fecha',      sql.Date,          new Date(payload.fecha));
   req.input('h_fecha_ing',  sql.DateTime,      now);
   req.input('h_pro_cl',     sql.VarChar(6),    '');
-  req.input('h_remito',     sql.VarChar(14),   nComp);
+  req.input('h_remito',     sql.VarChar(14),   '');
   req.input('h_estado',     sql.VarChar(1),    ESTADO_MOV);
-  req.input('h_deposi',     sql.VarChar(2),    payload.cod_origen);
+  req.input('h_deposi',     sql.VarChar(2),    '');
   req.input('h_cotiz',      sql.Decimal(18,4), 1);
   req.input('h_filler',     sql.VarChar(10),   'PEND.SWD');
   req.input('h_mon_cte',    sql.Bit,           1);
-  req.input('h_motivo',     sql.VarChar(1),    'C');
+  req.input('h_motivo',     sql.VarChar(1),    '');
   req.input('h_talonario',  sql.Int,           TALONARIO);
   req.input('h_usuario',    sql.VarChar(20),   'SUPERVISOR');
   req.input('h_hora',       sql.Int,           horaIngreso);
@@ -249,6 +249,7 @@ async function insertarRenglon(
   idMedidaCompra: number,
   tipoMov:        'S' | 'E',
   codDeposi:      string,
+  deposiDde:      string,
 ): Promise<void> {
   const s         = `_r${nroRenglon}`;
   const cantKilos = tubos * sta11.EQUIVALENCIA_STOCK_2;
@@ -271,6 +272,7 @@ async function insertarRenglon(
   req.input(`r_idsta14${s}`,   sql.Int,            idSta14);
   req.input(`r_tipomov${s}`,   sql.VarChar(1),     tipoMov);
   req.input(`r_deposi${s}`,    sql.VarChar(2),     codDeposi);
+  req.input(`r_depdde${s}`,    sql.VarChar(2),     deposiDde);
 
   await req.query(`
     INSERT INTO sta20 (
@@ -279,7 +281,7 @@ async function insertarRenglon(
       CANTIDAD,    CANTIDAD_2,
       CANT_PEND,   CANT_PEND_2,
       EQUIVALENC,  CAN_EQUI_V,
-      COD_DEPOSI,  TIPO_MOV,
+      COD_DEPOSI,  DEPOSI_DDE, TIPO_MOV,
       ID_MEDIDA_STOCK,    ID_MEDIDA_STOCK_2,  ID_MEDIDA_VENTAS,
       ID_MEDIDA_COMPRA,   UNIDAD_MEDIDA_SELECCIONADA,
       ID_STA11,    ID_STA14
@@ -289,9 +291,9 @@ async function insertarRenglon(
       @r_cant${s}, @r_cant2${s},
       @r_cantpend${s}, @r_cantpend2${s},
       @r_equi${s}, @r_canequiv${s},
-      @r_deposi${s}, @r_tipomov${s},
+      @r_deposi${s}, @r_depdde${s}, @r_tipomov${s},
       @r_idmed${s},  @r_idmed2${s},  @r_idmedv${s},
-      @r_idmedc${s}, 'C',
+      @r_idmedc${s}, 'P',
       @r_idsta11${s}, @r_idsta14${s}
     )
   `);
@@ -357,8 +359,8 @@ async function insertarMovimientoSerie(
 
   await req.query(`
     INSERT INTO sta07 (
-      TCOMP_IN_S, NCOMP_IN_S, N_RENGL_S,
-      COD_ARTICU, N_SERIE,    COD_DEPOSI
+      TCOMP_IN_S, NCOMP_IN_S,   N_RENGL_S,
+      COD_ARTICU, N_SERIE,       COD_DEPOSI
     ) VALUES (
       '${TCOMP}', @m_ncomp${s}, @m_rengl${s},
       @m_articu${s}, @m_serie${s}, @m_deposi${s}
@@ -411,33 +413,33 @@ export async function guardarMovimientoDeposito(
       const idMedidaCompra = unidadCompraMap.get(item.cod_articu)!;
       const tubos          = item.series.length;
 
-      const renglonSalida  = r * 2 + 1;   // 1, 3, 5, ...
-      const renglonEntrada = r * 2 + 2;   // 2, 4, 6, ...
+      const renglon1 = r * 2 + 1;   // 1, 3, 5, ... → TIPO_MOV 'E', COD_DEPOSI=origen, DEPOSI_DDE=destino
+      const renglon2 = r * 2 + 2;   // 2, 4, 6, ... → TIPO_MOV 'S', COD_DEPOSI=destino, DEPOSI_DDE=origen
 
-      // Renglón salida — depósito origen
+      // Primer renglón — TIPO_MOV 'E', COD_DEPOSI=origen, DEPOSI_DDE=destino
       await insertarRenglon(
-        req, nroComp, renglonSalida, item.cod_articu,
+        req, nroComp, renglon1, item.cod_articu,
         tubos, idSta14, payload.fecha, sta11, idMedidaCompra,
-        'S', payload.cod_origen,
+        'E', payload.cod_origen, payload.cod_destino,
       );
 
-      // Renglón entrada — depósito destino
+      // Segundo renglón — TIPO_MOV 'S', COD_DEPOSI=destino, DEPOSI_DDE=origen
       await insertarRenglon(
-        req, nroComp, renglonEntrada, item.cod_articu,
+        req, nroComp, renglon2, item.cod_articu,
         tubos, idSta14, payload.fecha, sta11, idMedidaCompra,
-        'E', payload.cod_destino,
+        'S', payload.cod_destino, payload.cod_origen,
       );
 
       for (const nroSerie of item.series) {
         // sta06: actualizar al depósito destino
         await upsertSerie(req, item.cod_articu, nroSerie, serieIdx, payload.cod_destino);
 
-        // sta07 para renglón salida
-        await insertarMovimientoSerie(req, nroComp, renglonSalida, item.cod_articu, nroSerie, serieIdx, payload.cod_origen);
+        // sta07 para primer renglón (E, origen)
+        await insertarMovimientoSerie(req, nroComp, renglon1, item.cod_articu, nroSerie, serieIdx, payload.cod_origen);
         serieIdx++;
 
-        // sta07 para renglón entrada
-        await insertarMovimientoSerie(req, nroComp, renglonEntrada, item.cod_articu, nroSerie, serieIdx, payload.cod_destino);
+        // sta07 para segundo renglón (S, destino)
+        await insertarMovimientoSerie(req, nroComp, renglon2, item.cod_articu, nroSerie, serieIdx, payload.cod_destino);
         serieIdx++;
       }
     }
