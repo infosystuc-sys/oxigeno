@@ -60,11 +60,15 @@ export interface MovimientoSerie {
   deposito_nombre:  string;
 }
 
-export interface TrazabilidadSerie {
+export interface RutaArticulo {
   cod_articu:             string;
-  n_serie:                string;
   descrip:                string;
   cod_deposi_actual:      string;
   deposito_actual_nombre: string;
   historial:              MovimientoSerie[];
+}
+
+export interface TrazabilidadSerie {
+  n_serie: string;
+  rutas:   RutaArticulo[];
 }

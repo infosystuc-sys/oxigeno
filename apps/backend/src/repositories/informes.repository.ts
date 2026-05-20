@@ -238,54 +238,75 @@ export async function obtenerDetalle(idSta14: number): Promise<ComprobanteDetall
 export async function trazabilidadSerie(nSerie: string): Promise<TrazabilidadSerie | null> {
   const pool = await getPool();
 
-  const [curRes, histRes] = await Promise.all([
-    pool.request()
-      .input('serie', sql.NVarChar(30), nSerie)
-      .query<{
-        cod_articu: string; n_serie: string; descrip: string;
-        cod_deposi_actual: string; deposito_actual_nombre: string;
-      }>(`
-        SELECT TOP 1
-          RTRIM(s6.COD_ARTICU)                                         AS cod_articu,
-          RTRIM(s6.N_SERIE)                                            AS n_serie,
-          ISNULL(RTRIM(s11.DESCRIPCIO), '')                            AS descrip,
-          RTRIM(s6.COD_DEPOSI)                                         AS cod_deposi_actual,
-          ISNULL(RTRIM(s22.NOMBRE_SUC), RTRIM(s6.COD_DEPOSI))         AS deposito_actual_nombre
-        FROM STA06 s6 WITH (NOLOCK)
-        LEFT JOIN STA11 s11 WITH (NOLOCK) ON RTRIM(s11.COD_ARTICU) = RTRIM(s6.COD_ARTICU)
-        LEFT JOIN STA22 s22 WITH (NOLOCK) ON RTRIM(s22.COD_SUCURS) = RTRIM(s6.COD_DEPOSI)
-        WHERE RTRIM(s6.N_SERIE) = @serie
-      `),
+  // Todas las filas de sta06 para esta serie (una por artículo)
+  const artRes = await pool.request()
+    .input('serie', sql.NVarChar(30), nSerie)
+    .query<{
+      cod_articu: string; descrip: string;
+      cod_deposi_actual: string; deposito_actual_nombre: string;
+    }>(`
+      SELECT
+        RTRIM(s6.COD_ARTICU)                                         AS cod_articu,
+        ISNULL(RTRIM(s11.DESCRIPCIO), '')                            AS descrip,
+        RTRIM(s6.COD_DEPOSI)                                         AS cod_deposi_actual,
+        ISNULL(RTRIM(s22.NOMBRE_SUC), RTRIM(s6.COD_DEPOSI))         AS deposito_actual_nombre
+      FROM STA06 s6 WITH (NOLOCK)
+      LEFT JOIN STA11 s11 WITH (NOLOCK) ON RTRIM(s11.COD_ARTICU) = RTRIM(s6.COD_ARTICU)
+      LEFT JOIN STA22 s22 WITH (NOLOCK) ON RTRIM(s22.COD_SUCURS) = RTRIM(s6.COD_DEPOSI)
+      WHERE RTRIM(s6.N_SERIE) = @serie
+      ORDER BY s6.COD_ARTICU
+    `);
 
-    pool.request()
-      .input('serie', sql.NVarChar(30), nSerie)
-      .query<MovimientoSerie>(`
-        SELECT
-          RTRIM(s14.N_COMP) AS n_comp,
-          CASE
-            WHEN s14.N_COMP LIKE ' 00000%' THEN 'Recepción'
-            WHEN s14.N_COMP LIKE 'R00009%' THEN 'Remito a Cliente'
-            WHEN s14.N_COMP LIKE ' 90003%' THEN 'Movimiento entre Depósitos'
-            ELSE 'Otro'
-          END                                                          AS tipo_movimiento,
-          CONVERT(VARCHAR(10), s14.FECHA_INGRESO, 23)                  AS fecha,
-          RTRIM(s14.COD_PRO_CL)                                        AS entidad_cod,
-          RTRIM(s7.COD_DEPOSI)                                         AS cod_deposi,
-          ISNULL(RTRIM(dep.NOMBRE_SUC), RTRIM(s7.COD_DEPOSI))         AS deposito_nombre
-        FROM STA07 s7 WITH (NOLOCK)
-        JOIN STA14 s14 WITH (NOLOCK)
-          ON  s14.TCOMP_IN_S = s7.TCOMP_IN_S
-          AND s14.NCOMP_IN_S = s7.NCOMP_IN_S
-        LEFT JOIN STA22 dep WITH (NOLOCK) ON RTRIM(dep.COD_SUCURS) = RTRIM(s7.COD_DEPOSI)
-        WHERE RTRIM(s7.N_SERIE) = @serie
-        ORDER BY s14.FECHA_INGRESO ASC, s7.N_RENGL_S ASC
-      `),
-  ]);
+  if (artRes.recordset.length === 0) return null;
 
-  if (curRes.recordset.length === 0) return null;
+  // Todos los movimientos de esta serie, incluyendo cod_articu para agrupar
+  const histRes = await pool.request()
+    .input('serie', sql.NVarChar(30), nSerie)
+    .query<MovimientoSerie & { cod_articu: string }>(`
+      SELECT
+        RTRIM(s7.COD_ARTICU)                                           AS cod_articu,
+        RTRIM(s14.N_COMP)                                              AS n_comp,
+        CASE
+          WHEN s14.N_COMP LIKE ' 00000%' THEN 'Recepción'
+          WHEN s14.N_COMP LIKE 'R00009%' THEN 'Remito a Cliente'
+          WHEN s14.N_COMP LIKE ' 90003%' THEN 'Movimiento entre Depósitos'
+          ELSE 'Otro'
+        END                                                            AS tipo_movimiento,
+        CONVERT(VARCHAR(10), s14.FECHA_INGRESO, 23)                    AS fecha,
+        RTRIM(s14.COD_PRO_CL)                                         AS entidad_cod,
+        RTRIM(s7.COD_DEPOSI)                                          AS cod_deposi,
+        ISNULL(RTRIM(dep.NOMBRE_SUC), RTRIM(s7.COD_DEPOSI))           AS deposito_nombre
+      FROM STA07 s7 WITH (NOLOCK)
+      JOIN STA14 s14 WITH (NOLOCK)
+        ON  s14.TCOMP_IN_S = s7.TCOMP_IN_S
+        AND s14.NCOMP_IN_S = s7.NCOMP_IN_S
+      LEFT JOIN STA22 dep WITH (NOLOCK) ON RTRIM(dep.COD_SUCURS) = RTRIM(s7.COD_DEPOSI)
+      WHERE RTRIM(s7.N_SERIE) = @serie
+      ORDER BY s7.COD_ARTICU, s14.FECHA_INGRESO ASC, s7.N_RENGL_S ASC
+    `);
+
+  // Agrupar historial por artículo
+  const histMap = new Map<string, MovimientoSerie[]>();
+  for (const row of histRes.recordset) {
+    if (!histMap.has(row.cod_articu)) histMap.set(row.cod_articu, []);
+    histMap.get(row.cod_articu)!.push({
+      n_comp:          row.n_comp,
+      tipo_movimiento: row.tipo_movimiento,
+      fecha:           row.fecha,
+      entidad_cod:     row.entidad_cod,
+      cod_deposi:      row.cod_deposi,
+      deposito_nombre: row.deposito_nombre,
+    });
+  }
 
   return {
-    ...curRes.recordset[0],
-    historial: histRes.recordset,
+    n_serie: nSerie,
+    rutas: artRes.recordset.map(art => ({
+      cod_articu:             art.cod_articu,
+      descrip:                art.descrip,
+      cod_deposi_actual:      art.cod_deposi_actual,
+      deposito_actual_nombre: art.deposito_actual_nombre,
+      historial:              histMap.get(art.cod_articu) ?? [],
+    })),
   };
 }

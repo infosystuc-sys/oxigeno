@@ -536,105 +536,128 @@ function TabTrazabilidad() {
       {/* Resultado */}
       {data && (
         <div className="space-y-4">
-          {/* Ubicación actual */}
-          <div className="bg-white rounded-2xl shadow p-6">
-            <div className="flex items-start gap-5">
-              <div className="w-14 h-14 rounded-2xl bg-green-100 flex items-center justify-center shrink-0">
-                <svg className="w-8 h-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                    d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
-                </svg>
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-0.5">
-                  Serie
-                </p>
-                <p className="text-2xl font-mono font-bold text-gray-800 leading-tight">
-                  {data.n_serie}
-                </p>
-                <p className="text-sm text-gray-500 mt-0.5">{data.descrip}</p>
-              </div>
-              <div className="text-right shrink-0">
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-0.5">
-                  Ubicación actual
-                </p>
-                <p className="text-base font-bold text-green-700 leading-tight">
-                  {data.deposito_actual_nombre}
-                </p>
-                <p className="font-mono text-xs text-gray-400 mt-0.5">
-                  Depósito {data.cod_deposi_actual}
-                </p>
-              </div>
+          {/* Encabezado de la serie */}
+          <div className="bg-white rounded-2xl shadow p-6 flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-blue-100 flex items-center justify-center shrink-0">
+              <svg className="w-7 h-7 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z"/>
+              </svg>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Serie</p>
+              <p className="text-2xl font-mono font-bold text-gray-800">{data.n_serie}</p>
+            </div>
+            <div className="ml-auto">
+              <span className="bg-blue-100 text-blue-700 text-xs font-bold px-3 py-1 rounded-full">
+                {data.rutas.length} {data.rutas.length === 1 ? 'artículo' : 'artículos'}
+              </span>
             </div>
           </div>
 
-          {/* Historial */}
-          <div className="bg-white rounded-2xl shadow overflow-hidden">
-            <div className="bg-gray-50 border-b border-gray-200 px-6 py-4">
-              <h3 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">
-                Historial de movimientos ({data.historial.length})
-              </h3>
-            </div>
-
-            {data.historial.length === 0 ? (
-              <p className="text-center text-gray-400 text-sm italic py-10">
-                Sin movimientos registrados en el sistema
-              </p>
-            ) : (
-              <div className="p-5">
-                <ol className="relative border-l-2 border-gray-200 ml-3 space-y-0">
-                  {data.historial.map((mov, i) => (
-                    <li key={i} className="pl-6 pb-6 relative">
-                      {/* Dot */}
-                      <div className={[
-                        'absolute -left-[9px] top-1 w-4 h-4 rounded-full border-2 border-white',
-                        TIPO_COLORS[mov.tipo_movimiento] ?? 'bg-gray-400',
-                      ].join(' ')} />
-
-                      <div className="flex items-start gap-4">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className={[
-                              'text-xs font-bold px-2 py-0.5 rounded-full text-white',
-                              TIPO_COLORS[mov.tipo_movimiento] ?? 'bg-gray-400',
-                            ].join(' ')}>
-                              {TIPO_LABELS[mov.tipo_movimiento] ?? mov.tipo_movimiento}
-                            </span>
-                            <span className="font-mono text-xs text-gray-500">
-                              {mov.fecha}
-                            </span>
-                            <span className="font-mono text-xs font-bold text-gray-700">
-                              {mov.n_comp.trim()}
-                            </span>
-                          </div>
-                          <div className="mt-1.5 flex items-center gap-2 text-sm">
-                            <svg className="w-4 h-4 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                                d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-2 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>
-                            </svg>
-                            <span className="font-semibold text-gray-700">{mov.deposito_nombre}</span>
-                            <span className="font-mono text-xs text-gray-400">({mov.cod_deposi})</span>
-                          </div>
-                          {mov.entidad_cod && (
-                            <p className="text-xs text-gray-400 mt-0.5 ml-6">
-                              Entidad: <span className="font-mono">{mov.entidad_cod}</span>
-                            </p>
-                          )}
-                        </div>
-                        {i === data.historial.length - 1 && (
-                          <span className="text-[10px] bg-green-100 text-green-700 font-bold
-                                           px-2 py-0.5 rounded-full shrink-0 mt-0.5">
-                            ÚLTIMO
-                          </span>
-                        )}
-                      </div>
-                    </li>
-                  ))}
-                </ol>
+          {/* Una card por cada artículo/ruta */}
+          {data.rutas.map(ruta => (
+            <div key={ruta.cod_articu} className="space-y-3">
+              {/* Artículo + ubicación actual */}
+              <div className="bg-white rounded-2xl shadow p-6">
+                <div className="flex items-start gap-5">
+                  <div className="w-14 h-14 rounded-2xl bg-green-100 flex items-center justify-center shrink-0">
+                    <svg className="w-8 h-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
+                    </svg>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-0.5">
+                      Artículo
+                    </p>
+                    <p className="text-lg font-bold text-gray-800 leading-tight">
+                      {ruta.descrip}
+                    </p>
+                    <p className="font-mono text-xs text-gray-400 mt-0.5">{ruta.cod_articu}</p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-0.5">
+                      Ubicación actual
+                    </p>
+                    <p className="text-base font-bold text-green-700 leading-tight">
+                      {ruta.deposito_actual_nombre}
+                    </p>
+                    <p className="font-mono text-xs text-gray-400 mt-0.5">
+                      Depósito {ruta.cod_deposi_actual}
+                    </p>
+                  </div>
+                </div>
               </div>
-            )}
-          </div>
+
+              {/* Historial de este artículo */}
+              <div className="bg-white rounded-2xl shadow overflow-hidden">
+                <div className="bg-gray-50 border-b border-gray-200 px-6 py-4">
+                  <h3 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">
+                    Historial de movimientos ({ruta.historial.length})
+                  </h3>
+                </div>
+
+                {ruta.historial.length === 0 ? (
+                  <p className="text-center text-gray-400 text-sm italic py-10">
+                    Sin movimientos registrados para este artículo
+                  </p>
+                ) : (
+                  <div className="p-5">
+                    <ol className="relative border-l-2 border-gray-200 ml-3 space-y-0">
+                      {ruta.historial.map((mov, i) => (
+                        <li key={i} className="pl-6 pb-6 relative">
+                          <div className={[
+                            'absolute -left-[9px] top-1 w-4 h-4 rounded-full border-2 border-white',
+                            TIPO_COLORS[mov.tipo_movimiento] ?? 'bg-gray-400',
+                          ].join(' ')} />
+
+                          <div className="flex items-start gap-4">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className={[
+                                  'text-xs font-bold px-2 py-0.5 rounded-full text-white',
+                                  TIPO_COLORS[mov.tipo_movimiento] ?? 'bg-gray-400',
+                                ].join(' ')}>
+                                  {TIPO_LABELS[mov.tipo_movimiento] ?? mov.tipo_movimiento}
+                                </span>
+                                <span className="font-mono text-xs text-gray-500">
+                                  {mov.fecha}
+                                </span>
+                                <span className="font-mono text-xs font-bold text-gray-700">
+                                  {mov.n_comp.trim()}
+                                </span>
+                              </div>
+                              <div className="mt-1.5 flex items-center gap-2 text-sm">
+                                <svg className="w-4 h-4 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                    d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-2 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>
+                                </svg>
+                                <span className="font-semibold text-gray-700">{mov.deposito_nombre}</span>
+                                <span className="font-mono text-xs text-gray-400">({mov.cod_deposi})</span>
+                              </div>
+                              {mov.entidad_cod && (
+                                <p className="text-xs text-gray-400 mt-0.5 ml-6">
+                                  Entidad: <span className="font-mono">{mov.entidad_cod}</span>
+                                </p>
+                              )}
+                            </div>
+                            {i === ruta.historial.length - 1 && (
+                              <span className="text-[10px] bg-green-100 text-green-700 font-bold
+                                               px-2 py-0.5 rounded-full shrink-0 mt-0.5">
+                                ÚLTIMO
+                              </span>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>
