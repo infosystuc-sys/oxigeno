@@ -5,7 +5,7 @@
  *  1. Consultar STA11 y STA_ARTICULO_UNIDAD_COMPRA por cada artículo (fuera de la tx)
  *  2. Iniciar transacción
  *  3. Leer RIV_PROXIMO.PROXIMO (T_COMP='REM') con UPDLOCK → nComp = 'R00009' + PROXIMO
- *  4. Calcular NCOMP_IN_S: MAX(STA14.NCOMP_IN_S WHERE TCOMP='RP')+1
+ *  4. Calcular NCOMP_IN_S: MAX(STA14.NCOMP_IN_S WHERE TCOMP='RE')+1
  *  5. INSERT sta14 → captura ID_STA14
  *  6. Por cada artículo:
  *       INSERT sta20
@@ -20,7 +20,7 @@ import type { PostRemitoClientePayload, RemitoClienteResponse } from '@oxigeno/s
 
 const COD_DEP    = '30';
 const ESTADO_MOV = 'P';
-const TCOMP      = 'RP';
+const TCOMP      = 'RE';
 const TCOMP_REM  = 'REM';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -69,6 +69,26 @@ export async function validarSerie(
 
   if (res.recordset.length === 0) return { existe: false };
   return { existe: true, cod_deposi: res.recordset[0].COD_DEPOSI };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Consultar ID_GVA14 del cliente
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function consultarIdGva14(codClient: string): Promise<number> {
+  const pool = await getPool();
+  const res  = await pool.request()
+    .input('cod', sql.VarChar(6), codClient)
+    .query<{ ID_GVA14: number }>(`
+      SELECT ID_GVA14
+      FROM gva14 WITH (NOLOCK)
+      WHERE COD_CLIENT = @cod
+    `);
+
+  if (res.recordset.length === 0) {
+    throw new Error(`Cliente '${codClient}' no encontrado en GVA14`);
+  }
+  return res.recordset[0].ID_GVA14;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -180,10 +200,11 @@ async function leerNroComp(req: sql.Request): Promise<string> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function insertarEncabezado(
-  req:     sql.Request,
-  nroComp: string,
-  nComp:   string,   // 'R00009' + PROXIMO — va en N_COMP y en N_REMITO
-  payload: PostRemitoClientePayload,
+  req:      sql.Request,
+  nroComp:  string,
+  nComp:    string,
+  payload:  PostRemitoClientePayload,
+  idGva14:  number,
 ): Promise<number> {
   const now         = new Date();
   const horaIngreso = parseInt(
@@ -200,18 +221,21 @@ async function insertarEncabezado(
   req.input('h_fecha',       sql.Date,          new Date(payload.fecha));
   req.input('h_fecha_ing',   sql.DateTime,      now);
   req.input('h_client',      sql.VarChar(6),    payload.cod_client);
-  req.input('h_remito',      sql.VarChar(14),   nComp);   // N_REMITO = mismo nComp
+  req.input('h_remito',      sql.VarChar(14),   nComp);
   req.input('h_estado',      sql.VarChar(1),    ESTADO_MOV);
   req.input('h_deposi',      sql.VarChar(2),    COD_DEP);
   req.input('h_cotiz',       sql.Decimal(18,4), 1);
   req.input('h_filler',      sql.VarChar(10),   'PEND.SWD');
   req.input('h_mon_cte',     sql.Bit,           1);
-  req.input('h_motivo',      sql.VarChar(1),    'C');
-  req.input('h_talonario',   sql.Int,           11);
+  req.input('h_motivo',      sql.VarChar(1),    'V');
+  req.input('h_talonario',   sql.Int,           3);
   req.input('h_usuario',     sql.VarChar(20),   'SUPERVISOR');
   req.input('h_hora',        sql.Int,           horaIngreso);
   req.input('h_usr_ing',     sql.VarChar(20),   'SUPERVISOR');
   req.input('h_terminal',    sql.VarChar(20),   'APLICACION');
+  req.input('h_transp',      sql.VarChar(6),    '01');
+  req.input('h_id_gva14',    sql.Int,           idGva14);
+  req.input('h_cond_vta',    sql.Int,           1);
 
   const result = await req.query<{ ID_STA14: number }>(`
     DECLARE @tmp TABLE (ID_STA14 INT);
@@ -222,7 +246,9 @@ async function insertarEncabezado(
       COD_DEPOSI,  NRO_SUCURS,   COTIZ,
       FILLER,      MON_CTE,      MOTIVO_REM,
       TALONARIO,   USUARIO,      HORA_INGRESO,
-      USUARIO_INGRESO,           TERMINAL_INGRESO
+      USUARIO_INGRESO,           TERMINAL_INGRESO,
+      COD_TRANSP,  NRO_SUCURSAL_DESTINO_REMITO,
+      ID_GVA14,    COND_VTA
     )
     OUTPUT INSERTED.ID_STA14 INTO @tmp
     VALUES (
@@ -232,7 +258,9 @@ async function insertarEncabezado(
       @h_deposi,   0,            @h_cotiz,
       @h_filler,   @h_mon_cte,   @h_motivo,
       @h_talonario, @h_usuario,  @h_hora,
-      @h_usr_ing,                @h_terminal
+      @h_usr_ing,                @h_terminal,
+      @h_transp,   0,
+      @h_id_gva14, @h_cond_vta
     );
     SELECT ID_STA14 FROM @tmp;
   `);
@@ -375,7 +403,9 @@ export async function guardarRemitoCliente(
   payload: PostRemitoClientePayload,
 ): Promise<RemitoClienteResponse> {
 
-  // ── 1. Consultar STA11 y STA_ARTICULO_UNIDAD_COMPRA (fuera de la transacción)
+  // ── 1. Consultar ID_GVA14, STA11 y STA_ARTICULO_UNIDAD_COMPRA (fuera de la tx)
+  const idGva14 = await consultarIdGva14(payload.cod_client);
+
   const sta11Map        = new Map<string, Sta11Data>();
   const unidadCompraMap = new Map<string, number>();
 
@@ -401,7 +431,7 @@ export async function guardarRemitoCliente(
     const nroComp = await leerNroComp(req);
 
     // ── 5. Encabezado sta14 → captura ID_STA14 ────────────────────────────
-    const idSta14 = await insertarEncabezado(req, nroComp, nComp, payload);
+    const idSta14 = await insertarEncabezado(req, nroComp, nComp, payload, idGva14);
 
     let serieIdx = 0;
 
