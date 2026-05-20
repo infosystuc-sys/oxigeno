@@ -154,9 +154,9 @@ async function insertarEncabezado(
   req.input('h_fecha',       sql.Date,          new Date(payload.fecha));
   req.input('h_fecha_ing',   sql.DateTime,      now);
   req.input('h_provee',      sql.VarChar(6),    payload.cod_provee);
-  req.input('h_remito',      sql.VarChar(14),   payload.nro_remito.substring(0, 14));
+  req.input('h_remito',      sql.VarChar(14),   '');
   req.input('h_estado',      sql.VarChar(1),    ESTADO_MOV);
-  req.input('h_deposi',      sql.VarChar(2),    COD_DEP);
+  req.input('h_deposi',      sql.VarChar(2),    '');
   req.input('h_cotiz',       sql.Decimal(18,4), 1);
   req.input('h_filler',      sql.VarChar(10),   'PEND.SWD');
   req.input('h_mon_cte',     sql.Bit,           1);
@@ -177,7 +177,8 @@ async function insertarEncabezado(
       COD_DEPOSI,  NRO_SUCURS,   COTIZ,
       FILLER,      MON_CTE,      MOTIVO_REM,
       TALONARIO,   USUARIO,      HORA_INGRESO,
-      USUARIO_INGRESO,           TERMINAL_INGRESO
+      USUARIO_INGRESO,           TERMINAL_INGRESO,
+      NRO_SUCURSAL_DESTINO_REMITO
     )
     OUTPUT INSERTED.ID_STA14 INTO @tmp
     VALUES (
@@ -187,7 +188,8 @@ async function insertarEncabezado(
       @h_deposi,   0,            @h_cotiz,
       @h_filler,   @h_mon_cte,   @h_motivo,
       @h_talonario, @h_usuario,  @h_hora,
-      @h_usr_ing,                @h_terminal
+      @h_usr_ing,                @h_terminal,
+      0
     );
     SELECT ID_STA14 FROM @tmp;
   `);
