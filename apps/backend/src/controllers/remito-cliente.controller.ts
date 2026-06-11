@@ -12,9 +12,10 @@ const ItemSchema = z.object({
 });
 
 const RemitoClienteSchema = z.object({
-  cod_client: z.string().min(1, 'cod_client requerido'),
-  fecha:      z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'fecha debe tener formato YYYY-MM-DD'),
-  items:      z.array(ItemSchema).min(1, 'Se requiere al menos un artículo'),
+  cod_client:     z.string().min(1, 'cod_client requerido'),
+  fecha:          z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'fecha debe tener formato YYYY-MM-DD'),
+  items:          z.array(ItemSchema).min(1, 'Se requiere al menos un artículo'),
+  envases_vacios: z.array(ItemSchema).optional(),
 });
 
 export async function getProximoRemito(_req: Request, res: Response): Promise<void> {
@@ -53,10 +54,37 @@ export async function postRemitoCliente(req: Request, res: Response): Promise<vo
   }
 
   // Unicidad por cod_articu + serie (la misma serie puede existir para artículos distintos)
-  const allKeys    = parsed.data.items.flatMap(i => i.series.map(s => `${i.cod_articu}:${s}`));
+  // Incluye envases vacíos en la verificación
+  const keysItems  = parsed.data.items.flatMap(i => i.series.map(s => `${i.cod_articu}:${s}`));
+  const keysVacios = (parsed.data.envases_vacios ?? []).flatMap(i => i.series.map(s => `${i.cod_articu}:${s}`));
+  const allKeys    = [...keysItems, ...keysVacios];
   const duplicadas = allKeys.filter((k, i) => allKeys.indexOf(k) !== i);
   if (duplicadas.length > 0) {
     res.status(400).json({ error: 'Series duplicadas en el payload', duplicadas: [...new Set(duplicadas)] });
+    return;
+  }
+
+  // Validar que envases vacíos coincidan por artículo con cilindros llenos
+  const llenosByArt = new Map<string, number>();
+  for (const it of parsed.data.items) {
+    llenosByArt.set(it.cod_articu, (llenosByArt.get(it.cod_articu) ?? 0) + it.series.length);
+  }
+  const vaciosByArt = new Map<string, number>();
+  for (const it of (parsed.data.envases_vacios ?? [])) {
+    vaciosByArt.set(it.cod_articu, (vaciosByArt.get(it.cod_articu) ?? 0) + it.series.length);
+  }
+  const desbalance: { cod_articu: string; llenos: number; vacios: number }[] = [];
+  const codArticus = new Set<string>([...llenosByArt.keys(), ...vaciosByArt.keys()]);
+  for (const c of codArticus) {
+    const l = llenosByArt.get(c) ?? 0;
+    const v = vaciosByArt.get(c) ?? 0;
+    if (l !== v) desbalance.push({ cod_articu: c, llenos: l, vacios: v });
+  }
+  if (desbalance.length > 0) {
+    res.status(400).json({
+      error: 'La cantidad de envases vacíos debe coincidir con la de cilindros llenos para cada artículo',
+      desbalance,
+    });
     return;
   }
 

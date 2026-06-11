@@ -131,8 +131,17 @@ export function RecepcionForm() {
     articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '',
   });
   const [confirmedGroups, setConfirmedGroups] = useState<ConfirmedGroup[]>([]);
+
+  // Envases vacíos entregados (opcional)
+  const [vacioSlot,    setVacioSlot]    = useState<CurrentSlot>({
+    articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '',
+  });
+  const [vacioGroups,  setVacioGroups]  = useState<ConfirmedGroup[]>([]);
+  const [scanTarget,   setScanTarget]   = useState<'cilindro' | 'vacio'>('cilindro');
+
   const allSeriesRef  = useRef<Set<string>>(new Set());
   const scanZoneRef   = useRef<HTMLDivElement>(null);
+  const vacioScanZoneRef = useRef<HTMLDivElement>(null);
   const fechaRef      = useRef<HTMLInputElement>(null);
   const remitoRef     = useRef<HTMLInputElement>(null);
   const provSearchRef = useRef<HTMLInputElement>(null);
@@ -186,12 +195,20 @@ export function RecepcionForm() {
       return [...prev, { articulo: art, series }];
     });
     setCurrentSlot({ articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '' });
+
+    // Pre-sugerir el mismo artículo en la card de envases vacíos si está libre
+    setVacioSlot(prev =>
+      prev.articulo === null && prev.series.length === 0
+        ? { ...prev, articulo: art }
+        : prev
+    );
   }
 
   // ── Seleccionar gas: commit current si tiene series, limpiar para nuevo ───
   function selectGas(gas: Articulo) {
     confirmCurrentSlot();
     setCurrentSlot({ articulo: gas, series: [], gasSearch: '', showDropdown: false, manualInput: '' });
+    setScanTarget('cilindro');
     setTimeout(() => scanZoneRef.current?.focus(), 50);
   }
 
@@ -199,6 +216,35 @@ export function RecepcionForm() {
   function clearCurrentSlot() {
     currentSlot.series.forEach(s => allSeriesRef.current.delete(s));
     setCurrentSlot({ articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '' });
+  }
+
+  // ── Confirmar / seleccionar / limpiar slot de envases vacíos ──────────────
+  function confirmVacioSlot() {
+    if (!vacioSlot.articulo || vacioSlot.series.length === 0) return;
+    const art    = vacioSlot.articulo;
+    const series = vacioSlot.series;
+    setVacioGroups(prev => {
+      const idx = prev.findIndex(g => g.articulo.cod_articu === art.cod_articu);
+      if (idx >= 0) {
+        const updated = [...prev];
+        updated[idx] = { ...updated[idx], series: [...updated[idx].series, ...series] };
+        return updated;
+      }
+      return [...prev, { articulo: art, series }];
+    });
+    setVacioSlot({ articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '' });
+  }
+
+  function selectVacioGas(gas: Articulo) {
+    confirmVacioSlot();
+    setVacioSlot({ articulo: gas, series: [], gasSearch: '', showDropdown: false, manualInput: '' });
+    setScanTarget('vacio');
+    setTimeout(() => vacioScanZoneRef.current?.focus(), 50);
+  }
+
+  function clearVacioSlot() {
+    vacioSlot.series.forEach(s => allSeriesRef.current.delete(s));
+    setVacioSlot({ articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '' });
   }
 
   // ── Agregar serie al slot actual ──────────────────────────────────────────
@@ -215,21 +261,73 @@ export function RecepcionForm() {
     setCurrentSlot(prev => ({ ...prev, series: [...prev.series, trimmed] }));
   }, []);
 
+  const addVacioSerie = useCallback((code: string) => {
+    const trimmed = code.trim();
+    if (trimmed.length < 3) return;
+    if (allSeriesRef.current.has(trimmed)) {
+      beep(); setTimeout(beep, 150);
+      alert(`⚠️  La serie "${trimmed}" ya fue escaneada en este remito.`);
+      return;
+    }
+    beep();
+    allSeriesRef.current.add(trimmed);
+    setVacioSlot(prev => ({ ...prev, series: [...prev.series, trimmed] }));
+  }, []);
+
   // ── Callback del scanner (lector de barras) ───────────────────────────────
   const handleScan = useCallback(
     (code: string) => {
-      if (!currentSlot.articulo) return;
-      addSerie(code);
+      if (scanTarget === 'vacio' && vacioSlot.articulo) { addVacioSerie(code); return; }
+      if (scanTarget === 'cilindro' && currentSlot.articulo) { addSerie(code); return; }
+      // Fallback: si solo uno de los dos tiene gas seleccionado
+      if (currentSlot.articulo) addSerie(code);
+      else if (vacioSlot.articulo) addVacioSerie(code);
     },
-    [currentSlot.articulo, addSerie]
+    [scanTarget, currentSlot.articulo, vacioSlot.articulo, addSerie, addVacioSerie]
   );
 
-  useBarcodeScanner(handleScan, !!currentSlot.articulo && !saving && resultado === null);
+  useBarcodeScanner(
+    handleScan,
+    (!!currentSlot.articulo || !!vacioSlot.articulo) && !saving && resultado === null,
+  );
 
   // ── Derivados ─────────────────────────────────────────────────────────────
   const totalConfirmed = confirmedGroups.reduce((n, g) => n + g.series.length, 0);
   const totalSeries    = totalConfirmed + currentSlot.series.length;
-  const canSave        = !!remito.trim() && !!proveedor && totalSeries > 0 && !saving;
+
+  // Cantidades por artículo (incluyendo slot en curso) para validar balance
+  const llenosByArt = new Map<string, number>();
+  for (const g of confirmedGroups) {
+    llenosByArt.set(g.articulo.cod_articu, (llenosByArt.get(g.articulo.cod_articu) ?? 0) + g.series.length);
+  }
+  if (currentSlot.articulo && currentSlot.series.length > 0) {
+    const k = currentSlot.articulo.cod_articu;
+    llenosByArt.set(k, (llenosByArt.get(k) ?? 0) + currentSlot.series.length);
+  }
+  const vaciosByArt = new Map<string, number>();
+  for (const g of vacioGroups) {
+    vaciosByArt.set(g.articulo.cod_articu, (vaciosByArt.get(g.articulo.cod_articu) ?? 0) + g.series.length);
+  }
+  if (vacioSlot.articulo && vacioSlot.series.length > 0) {
+    const k = vacioSlot.articulo.cod_articu;
+    vaciosByArt.set(k, (vaciosByArt.get(k) ?? 0) + vacioSlot.series.length);
+  }
+  const desbalance: { cod_articu: string; descrip: string; llenos: number; vacios: number }[] = [];
+  const codArticus = new Set<string>([...llenosByArt.keys(), ...vaciosByArt.keys()]);
+  for (const c of codArticus) {
+    const l = llenosByArt.get(c) ?? 0;
+    const v = vaciosByArt.get(c) ?? 0;
+    if (l !== v) {
+      const fromLlenos = confirmedGroups.find(g => g.articulo.cod_articu === c)?.articulo
+                       ?? (currentSlot.articulo?.cod_articu === c ? currentSlot.articulo : null);
+      const fromVacios = vacioGroups.find(g => g.articulo.cod_articu === c)?.articulo
+                       ?? (vacioSlot.articulo?.cod_articu === c ? vacioSlot.articulo : null);
+      const descrip = fromLlenos?.descrip ?? fromVacios?.descrip ?? c;
+      desbalance.push({ cod_articu: c, descrip, llenos: l, vacios: v });
+    }
+  }
+  const balanceado = desbalance.length === 0 && totalSeries > 0;
+  const canSave    = !!remito.trim() && !!proveedor && totalSeries > 0 && balanceado && !saving;
 
   // ── Eliminar serie del slot actual ────────────────────────────────────────
   function removeCurrentSerie(serie: string) {
@@ -259,6 +357,32 @@ export function RecepcionForm() {
     });
   }
 
+  // ── Series de envases vacíos: remover ─────────────────────────────────────
+  function removeVacioCurrentSerie(serie: string) {
+    allSeriesRef.current.delete(serie);
+    setVacioSlot(prev => ({ ...prev, series: prev.series.filter(s => s !== serie) }));
+  }
+
+  function removeVacioConfirmedSerie(codArticu: string, serie: string) {
+    allSeriesRef.current.delete(serie);
+    setVacioGroups(prev =>
+      prev
+        .map(g => g.articulo.cod_articu === codArticu
+          ? { ...g, series: g.series.filter(s => s !== serie) }
+          : g
+        )
+        .filter(g => g.series.length > 0)
+    );
+  }
+
+  function removeVacioConfirmedGroup(codArticu: string) {
+    setVacioGroups(prev => {
+      const group = prev.find(g => g.articulo.cod_articu === codArticu);
+      if (group) group.series.forEach(s => allSeriesRef.current.delete(s));
+      return prev.filter(g => g.articulo.cod_articu !== codArticu);
+    });
+  }
+
   // ── Guardar ───────────────────────────────────────────────────────────────
   async function handleGuardar() {
     if (!canSave || !proveedor) return;
@@ -277,11 +401,26 @@ export function RecepcionForm() {
       }
     }
 
+    // Merge vacíos confirmados + slot vacío actual
+    const allVacios: ConfirmedGroup[] = vacioGroups.map(g => ({ ...g }));
+    if (vacioSlot.articulo && vacioSlot.series.length > 0) {
+      const art = vacioSlot.articulo;
+      const idx = allVacios.findIndex(g => g.articulo.cod_articu === art.cod_articu);
+      if (idx >= 0) {
+        allVacios[idx] = { ...allVacios[idx], series: [...allVacios[idx].series, ...vacioSlot.series] };
+      } else {
+        allVacios.push({ articulo: art, series: vacioSlot.series });
+      }
+    }
+
     const payload: PostRecepcionPayload = {
       cod_provee: proveedor.cod_provee,
       nro_remito: remito.trim(),
       fecha,
-      items: allGroups.map(g => ({ cod_articu: g.articulo.cod_articu, series: g.series })),
+      items:          allGroups.map(g => ({ cod_articu: g.articulo.cod_articu, series: g.series })),
+      envases_vacios: allVacios.length > 0
+        ? allVacios.map(g => ({ cod_articu: g.articulo.cod_articu, series: g.series }))
+        : undefined,
     };
 
     try {
@@ -322,6 +461,9 @@ export function RecepcionForm() {
     setShowDropdown(false);
     setCurrentSlot({ articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '' });
     setConfirmedGroups([]);
+    setVacioSlot({ articulo: null, series: [], gasSearch: '', showDropdown: false, manualInput: '' });
+    setVacioGroups([]);
+    setScanTarget('cilindro');
     allSeriesRef.current = new Set();
     setResultado(null);
     setApiError(null);
@@ -627,11 +769,13 @@ export function RecepcionForm() {
                   <div
                     ref={scanZoneRef}
                     tabIndex={0}
-                    onClick={() => scanZoneRef.current?.focus()}
-                    className="border-2 border-dashed border-blue-400 rounded-xl p-4 text-center
-                               cursor-pointer select-none outline-none transition-colors bg-blue-50
-                               hover:border-blue-500 focus:border-blue-600 focus:bg-blue-100
-                               focus:ring-4 focus:ring-blue-200"
+                    onClick={() => { setScanTarget('cilindro'); scanZoneRef.current?.focus(); }}
+                    onFocus={() => setScanTarget('cilindro')}
+                    className={`border-2 border-dashed rounded-xl p-4 text-center cursor-pointer
+                                select-none outline-none transition-colors
+                                ${scanTarget === 'cilindro'
+                                  ? 'border-blue-600 bg-blue-100 ring-4 ring-blue-200'
+                                  : 'border-blue-300 bg-blue-50 hover:border-blue-500'}`}
                   >
                     <div className="flex justify-center mb-1 text-blue-400">
                       <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
@@ -718,6 +862,182 @@ export function RecepcionForm() {
                 <div className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center bg-gray-50">
                   <p className="text-gray-400">Seleccione un tipo de gas para activar el scanner</p>
                 </div>
+              )}
+            </section>
+
+            {/* ── Card: Envases vacíos entregados (opcional) ─────────────── */}
+            <section className="bg-white rounded-2xl shadow p-6 space-y-4 border-l-4 border-amber-400">
+              <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                <h2 className="text-lg font-bold text-gray-700">
+                  Envases vacíos entregados <span className="text-xs text-gray-400 font-normal">(opcional · sale del depósito 33)</span>
+                </h2>
+                <span className="text-[10px] bg-amber-100 text-amber-700 font-bold px-2 py-1 rounded uppercase tracking-wide">
+                  VS
+                </span>
+              </div>
+
+              {/* Selector de gas para vacíos */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+                  Tipo de Gas (envase vacío)
+                </label>
+
+                {vacioSlot.articulo ? (
+                  <div className="flex items-center gap-3 border border-amber-400 bg-amber-50 rounded-xl px-4 py-3">
+                    <span className="font-mono text-sm text-gray-400 shrink-0">{vacioSlot.articulo.cod_articu}</span>
+                    <span className="flex-1 text-base font-semibold text-gray-800 leading-tight">
+                      {vacioSlot.articulo.descrip}
+                    </span>
+                    <button
+                      onClick={clearVacioSlot}
+                      className="text-gray-400 hover:text-red-500 text-2xl font-light leading-none"
+                      title="Cambiar gas"
+                    >×</button>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={vacioSlot.gasSearch}
+                      onChange={e => setVacioSlot(prev => ({ ...prev, gasSearch: e.target.value, showDropdown: true }))}
+                      onFocus={() => setVacioSlot(prev => ({ ...prev, showDropdown: true }))}
+                      onBlur={() => setTimeout(() => setVacioSlot(prev => ({ ...prev, showDropdown: false })), 200)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const filtered = vacioSlot.gasSearch
+                            ? gases.filter(g =>
+                                g.descrip.toLowerCase().includes(vacioSlot.gasSearch.toLowerCase()) ||
+                                g.cod_articu.toLowerCase().includes(vacioSlot.gasSearch.toLowerCase())
+                              )
+                            : gases;
+                          if (filtered.length > 0) selectVacioGas(filtered[0]);
+                        }
+                      }}
+                      placeholder="Buscar tipo de gas…"
+                      className="w-full border border-gray-300 rounded-xl px-4 py-3 text-base
+                                 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent"
+                    />
+                    {vacioSlot.showDropdown && (() => {
+                      const filtered = vacioSlot.gasSearch
+                        ? gases.filter(g =>
+                            g.descrip.toLowerCase().includes(vacioSlot.gasSearch.toLowerCase()) ||
+                            g.cod_articu.toLowerCase().includes(vacioSlot.gasSearch.toLowerCase())
+                          )
+                        : gases;
+                      if (filtered.length === 0) return null;
+                      return (
+                        <ul className="absolute z-30 w-full mt-1.5 bg-white border border-gray-200
+                                       rounded-xl shadow-xl max-h-60 overflow-y-auto divide-y divide-gray-100">
+                          {filtered.map(g => (
+                            <li key={g.cod_articu}>
+                              <button
+                                onMouseDown={() => selectVacioGas(g)}
+                                className="w-full text-left px-4 py-3 hover:bg-amber-50 flex items-center gap-3 transition-colors"
+                              >
+                                <span className="font-mono text-sm text-gray-400 w-28 shrink-0">{g.cod_articu}</span>
+                                <span className="text-sm text-gray-800">{g.descrip}</span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+
+              {/* Zona scan + manual para vacíos */}
+              {vacioSlot.articulo && (
+                <>
+                  <div
+                    ref={vacioScanZoneRef}
+                    tabIndex={0}
+                    onClick={() => { setScanTarget('vacio'); vacioScanZoneRef.current?.focus(); }}
+                    onFocus={() => setScanTarget('vacio')}
+                    className={`border-2 border-dashed rounded-xl p-4 text-center cursor-pointer
+                                select-none outline-none transition-colors
+                                ${scanTarget === 'vacio'
+                                  ? 'border-amber-500 bg-amber-100 ring-4 ring-amber-200'
+                                  : 'border-amber-300 bg-amber-50 hover:border-amber-500'}`}
+                  >
+                    <p className="text-amber-700 font-bold">
+                      {scanTarget === 'vacio' ? 'Listo para escanear (envases vacíos)' : 'Click para activar scanner de envases'}
+                    </p>
+                    <p className="text-gray-400 text-xs mt-1">
+                      {scanTarget === 'vacio' ? 'Apunte el lector al código de barras' : 'Actualmente el scanner apunta a cilindros'}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+                      Ingreso manual
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={vacioSlot.manualInput}
+                        onChange={e => setVacioSlot(prev => ({ ...prev, manualInput: e.target.value }))}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            addVacioSerie(vacioSlot.manualInput);
+                            setVacioSlot(prev => ({ ...prev, manualInput: '' }));
+                          }
+                        }}
+                        placeholder="Escribir serie y presionar Enter…"
+                        className="flex-1 border border-gray-300 rounded-xl px-4 py-2.5 text-base font-mono
+                                   focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent"
+                      />
+                      <button
+                        onClick={() => {
+                          addVacioSerie(vacioSlot.manualInput);
+                          setVacioSlot(prev => ({ ...prev, manualInput: '' }));
+                        }}
+                        disabled={vacioSlot.manualInput.trim().length < 3}
+                        className="px-4 py-2.5 bg-amber-600 hover:bg-amber-700 disabled:bg-gray-300
+                                   disabled:cursor-not-allowed text-white font-bold rounded-xl
+                                   text-sm transition-colors"
+                      >
+                        Agregar
+                      </button>
+                    </div>
+                  </div>
+
+                  {vacioSlot.series.length > 0 && (
+                    <div className="space-y-2">
+                      <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                        Series ingresadas ({vacioSlot.series.length})
+                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        {vacioSlot.series.map(serie => (
+                          <div key={serie}
+                            className="flex items-center gap-1.5 bg-amber-100 hover:bg-amber-200
+                                       rounded-lg px-3 py-1.5 transition-colors">
+                            <span className="font-mono text-sm text-amber-800 tracking-wide">{serie}</span>
+                            <button
+                              onClick={() => removeVacioCurrentSerie(serie)}
+                              className="text-amber-500 hover:text-red-500 text-lg leading-none transition-colors"
+                              title={`Eliminar ${serie}`}
+                            >×</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <button
+                    onClick={confirmVacioSlot}
+                    disabled={vacioSlot.series.length === 0}
+                    className="w-full py-3 bg-amber-600 hover:bg-amber-700 active:bg-amber-800
+                               disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed
+                               text-white font-bold rounded-xl transition-colors"
+                  >
+                    {vacioSlot.series.length > 0
+                      ? `Confirmar ${vacioSlot.series.length} envase${vacioSlot.series.length !== 1 ? 's' : ''} — ${vacioSlot.articulo?.descrip}`
+                      : 'Confirmar envases'}
+                  </button>
+                </>
               )}
             </section>
 
@@ -840,6 +1160,120 @@ export function RecepcionForm() {
                 </div>
               </div>
 
+              {/* Panel de envases vacíos entregados */}
+              {(vacioGroups.length > 0 || (vacioSlot.articulo && vacioSlot.series.length > 0)) && (
+                <div className="bg-white border border-amber-200 rounded-2xl shadow-sm overflow-hidden">
+                  <div className="bg-amber-50 border-b border-amber-200 px-5 py-3 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                          d="M20 13V7a2 2 0 00-2-2h-3l-2-2H9L7 5H4a2 2 0 00-2 2v6a2 2 0 002 2h16a2 2 0 002-2z" />
+                      </svg>
+                      <span className="text-xs font-semibold uppercase tracking-widest text-amber-700">
+                        Envases vacíos entregados
+                      </span>
+                    </div>
+                    {(() => {
+                      const totV = vacioGroups.reduce((n, g) => n + g.series.length, 0) + vacioSlot.series.length;
+                      return totV > 0 ? (
+                        <span className="bg-amber-100 text-amber-700 text-xs font-bold px-2.5 py-1 rounded-full">
+                          {totV} {totV === 1 ? 'envase' : 'envases'}
+                        </span>
+                      ) : null;
+                    })()}
+                  </div>
+
+                  <div className="p-4 space-y-3 max-h-[40vh] overflow-y-auto">
+                    {vacioGroups.map(group => (
+                      <div key={group.articulo.cod_articu}
+                        className="border border-amber-200 rounded-xl p-3 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className="flex-1 text-sm font-bold text-gray-700 leading-tight">
+                            {group.articulo.descrip}
+                          </span>
+                          <span className="font-mono text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded shrink-0">
+                            {group.articulo.cod_articu}
+                          </span>
+                          <span className="bg-amber-100 text-amber-700 text-xs font-bold px-2 py-0.5 rounded-full shrink-0">
+                            {group.series.length}
+                          </span>
+                          <button
+                            onClick={() => removeVacioConfirmedGroup(group.articulo.cod_articu)}
+                            className="text-gray-300 hover:text-red-500 text-xl leading-none transition-colors shrink-0"
+                            title="Eliminar grupo"
+                          >×</button>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {group.series.map(s => (
+                            <div key={s}
+                              className="flex items-center gap-1 bg-amber-50 hover:bg-amber-100
+                                         rounded-lg px-2.5 py-1 transition-colors">
+                              <span className="font-mono text-xs text-amber-800">{s}</span>
+                              <button
+                                onClick={() => removeVacioConfirmedSerie(group.articulo.cod_articu, s)}
+                                className="text-amber-400 hover:text-red-500 text-sm leading-none transition-colors"
+                                title={`Eliminar ${s}`}
+                              >×</button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+
+                    {vacioSlot.articulo && vacioSlot.series.length > 0 && (
+                      <div className="border border-amber-300 bg-amber-50 rounded-xl p-3 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className="flex-1 text-sm font-bold text-amber-800 leading-tight">
+                            {vacioSlot.articulo.descrip}
+                          </span>
+                          <span className="font-mono text-xs text-amber-500 bg-amber-100 px-2 py-0.5 rounded shrink-0">
+                            {vacioSlot.articulo.cod_articu}
+                          </span>
+                          <span className="bg-amber-200 text-amber-800 text-xs font-bold px-2 py-0.5 rounded-full shrink-0">
+                            {vacioSlot.series.length}
+                          </span>
+                          <span className="text-[10px] bg-amber-600 text-white px-1.5 py-0.5 rounded font-bold shrink-0">
+                            EN CURSO
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {vacioSlot.series.map(s => (
+                            <div key={s}
+                              className="flex items-center gap-1 bg-amber-100 hover:bg-amber-200
+                                         rounded-lg px-2.5 py-1 transition-colors">
+                              <span className="font-mono text-xs text-amber-700">{s}</span>
+                              <button
+                                onClick={() => removeVacioCurrentSerie(s)}
+                                className="text-amber-400 hover:text-red-500 text-sm leading-none transition-colors"
+                                title={`Eliminar ${s}`}
+                              >×</button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Aviso de desbalance llenos / vacíos */}
+              {desbalance.length > 0 && (
+                <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 space-y-1.5">
+                  <p className="text-sm font-semibold text-red-700">
+                    Los envases vacíos no coinciden con los cilindros llenos
+                  </p>
+                  <ul className="text-xs text-red-700 space-y-0.5">
+                    {desbalance.map(d => (
+                      <li key={d.cod_articu} className="flex items-center gap-2">
+                        <span className="font-mono text-[11px] bg-red-100 px-1.5 py-0.5 rounded">{d.cod_articu}</span>
+                        <span className="flex-1 truncate">{d.descrip}</span>
+                        <span className="font-semibold">{d.llenos} llenos / {d.vacios} vacíos</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {/* Botón Guardar recepción */}
               <button
                 onClick={handleGuardar}
@@ -850,9 +1284,11 @@ export function RecepcionForm() {
               >
                 {saving
                   ? 'Guardando…'
-                  : totalSeries > 0
-                    ? `Guardar recepción (${totalSeries} cilindro${totalSeries !== 1 ? 's' : ''})`
-                    : 'Guardar recepción'}
+                  : !balanceado && totalSeries > 0
+                    ? 'Faltan envases vacíos para guardar'
+                    : totalSeries > 0
+                      ? `Guardar recepción (${totalSeries} cilindro${totalSeries !== 1 ? 's' : ''})`
+                      : 'Guardar recepción'}
               </button>
 
             </div>

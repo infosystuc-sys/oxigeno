@@ -7,6 +7,7 @@ import type {
   DetalleArticulo,
   TrazabilidadSerie,
   MovimientoSerie,
+  AlertaTrazabilidad,
 } from '@oxigeno/shared-types';
 
 // ─── Discriminadores de tipo por prefijo de N_COMP ───────────────────────────
@@ -266,10 +267,13 @@ export async function trazabilidadSerie(nSerie: string): Promise<TrazabilidadSer
       SELECT
         RTRIM(s7.COD_ARTICU)                                           AS cod_articu,
         RTRIM(s14.N_COMP)                                              AS n_comp,
+        RTRIM(s14.TCOMP_IN_S)                                          AS tcomp_in_s,
         CASE
           WHEN RTRIM(s14.TCOMP_IN_S) = 'RP' THEN 'Recepción'
           WHEN RTRIM(s14.TCOMP_IN_S) = 'RE' THEN 'Remito a Cliente'
           WHEN RTRIM(s14.TCOMP_IN_S) = 'TI' THEN 'Movimiento entre Depósitos'
+          WHEN RTRIM(s14.TCOMP_IN_S) = 'VS' THEN 'Salida Envase Vacío'
+          WHEN RTRIM(s14.TCOMP_IN_S) = 'VE' THEN 'Entrada Envase Vacío'
           ELSE 'Otro'
         END                                                            AS tipo_movimiento,
         CONVERT(VARCHAR(10), s14.FECHA_INGRESO, 23)                    AS fecha,
@@ -301,6 +305,7 @@ export async function trazabilidadSerie(nSerie: string): Promise<TrazabilidadSer
     histMap.get(row.cod_articu)!.push({
       n_comp:          row.n_comp,
       tipo_movimiento: row.tipo_movimiento,
+      tcomp_in_s:      row.tcomp_in_s,
       fecha:           row.fecha,
       entidad_cod:     row.entidad_cod,
       entidad_nombre:  row.entidad_nombre,
@@ -311,12 +316,167 @@ export async function trazabilidadSerie(nSerie: string): Promise<TrazabilidadSer
 
   return {
     n_serie: nSerie,
-    rutas: artRes.recordset.map(art => ({
-      cod_articu:             art.cod_articu,
-      descrip:                art.descrip,
-      cod_deposi_actual:      art.cod_deposi_actual,
-      deposito_actual_nombre: art.deposito_actual_nombre,
-      historial:              histMap.get(art.cod_articu) ?? [],
-    })),
+    rutas: artRes.recordset.map(art => {
+      const historial = histMap.get(art.cod_articu) ?? [];
+      const { alertasRuta, alertasPorMov } = detectarAlertas(historial, art.cod_deposi_actual);
+      // Adjuntar alertas a cada movimiento
+      const historialConAlertas = historial.map((m, i) => {
+        const aIdx = alertasPorMov.get(i);
+        return aIdx && aIdx.length > 0 ? { ...m, alertas: aIdx } : m;
+      });
+      return {
+        cod_articu:             art.cod_articu,
+        descrip:                art.descrip,
+        cod_deposi_actual:      art.cod_deposi_actual,
+        deposito_actual_nombre: art.deposito_actual_nombre,
+        historial:              historialConAlertas,
+        alertas:                alertasRuta.length > 0 ? alertasRuta : undefined,
+      };
+    }),
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Detección de alertas de trazabilidad
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Series cuyo primer movimiento sea anterior a esta fecha se consideran legacy
+ * y no se les exige que arranquen con un RP.
+ */
+const FECHA_CORTE_TRAZABILIDAD = '2026-04-01';
+
+const TIPOS_INGRESO = new Set(['RP', 'VE']);   // entradas válidas al sistema
+const TIPOS_EGRESO  = new Set(['RE', 'VS']);   // salidas del sistema
+const TIPOS_INTERNO = new Set(['TI']);         // movimientos internos (no cambian estado adentro/afuera)
+
+interface MovWithTcomp {
+  tcomp_in_s?: string;
+  fecha:       string;
+  cod_deposi:  string;
+  n_comp:      string;
+}
+
+interface AlertasDetectadas {
+  alertasRuta:   AlertaTrazabilidad[];
+  alertasPorMov: Map<number, AlertaTrazabilidad[]>;
+}
+
+function detectarAlertas(
+  historial: MovWithTcomp[],
+  codDeposiActual: string,
+): AlertasDetectadas {
+  const alertasRuta:   AlertaTrazabilidad[]              = [];
+  const alertasPorMov: Map<number, AlertaTrazabilidad[]> = new Map();
+  const pushMov = (i: number, a: AlertaTrazabilidad) => {
+    if (!alertasPorMov.has(i)) alertasPorMov.set(i, []);
+    alertasPorMov.get(i)!.push(a);
+  };
+
+  if (historial.length === 0) return { alertasRuta, alertasPorMov };
+
+  // Regla #1: primer movimiento debe ser un Ingreso (RP)
+  const primero = historial[0];
+  if (primero.fecha >= FECHA_CORTE_TRAZABILIDAD && primero.tcomp_in_s !== 'RP') {
+    pushMov(0, {
+      codigo:    'PRIMER_MOV_NO_INGRESO',
+      severidad: 'error',
+      mensaje:   `El primer movimiento es ${primero.tcomp_in_s ?? 'desconocido'} (${primero.n_comp}); debería ser una Recepción (RP).`,
+    });
+  }
+
+  // Regla #7: orden ambiguo (misma FECHA_INGRESO) — alerta global de ruta
+  const fechasRepetidas = new Set<string>();
+  const vistos          = new Set<string>();
+  for (const m of historial) {
+    if (vistos.has(m.fecha)) fechasRepetidas.add(m.fecha);
+    vistos.add(m.fecha);
+  }
+  if (fechasRepetidas.size > 0) {
+    alertasRuta.push({
+      codigo:    'ORDEN_AMBIGUO_MISMA_FECHA',
+      severidad: 'info',
+      mensaje:   `Hay ${fechasRepetidas.size} fecha(s) con múltiples movimientos: el orden cronológico no es 100% confiable.`,
+    });
+  }
+
+  // Recorrido para reglas #2, #3, #4, #5
+  let ultimoDepositoEsperado: string | null = null;
+  let serieActiva                          = false;
+  let yaTuvoIngreso                        = false;
+  let legacy = primero.fecha < FECHA_CORTE_TRAZABILIDAD;
+
+  for (let i = 0; i < historial.length; i++) {
+    const m  = historial[i];
+    const tc = m.tcomp_in_s ?? '';
+
+    // #2 Depósito origen incorrecto
+    if (ultimoDepositoEsperado !== null && (TIPOS_INTERNO.has(tc) || TIPOS_EGRESO.has(tc))) {
+      if (m.cod_deposi !== ultimoDepositoEsperado) {
+        // Para TI, hay 2 renglones por serie: aceptamos match en el siguiente del mismo n_comp
+        const siguiente = historial[i + 1];
+        const matchTi   = siguiente && siguiente.n_comp === m.n_comp && siguiente.cod_deposi === ultimoDepositoEsperado;
+        if (!matchTi) {
+          pushMov(i, {
+            codigo:    'DEPOSITO_ORIGEN_INCORRECTO',
+            severidad: 'error',
+            mensaje:   `La serie estaba en depósito ${ultimoDepositoEsperado}, pero este movimiento parte del ${m.cod_deposi}.`,
+          });
+        }
+      }
+    }
+
+    // #3 Egreso sin ingreso previo (salvo legacy)
+    if (TIPOS_EGRESO.has(tc) && !yaTuvoIngreso && !legacy) {
+      pushMov(i, {
+        codigo:    'EGRESO_SIN_INGRESO',
+        severidad: 'error',
+        mensaje:   `Egreso sin un Ingreso previo registrado.`,
+      });
+    }
+
+    // #4 Ingreso sobre serie ya activa
+    if (tc === 'RP' && serieActiva) {
+      pushMov(i, {
+        codigo:    'INGRESO_SOBRE_SERIE_ACTIVA',
+        severidad: 'warning',
+        mensaje:   `Recepción sobre una serie que ya estaba activa en stock.`,
+      });
+    }
+
+    // #5 Movimiento después de un egreso sin VE/RP intermedio
+    if (!serieActiva && yaTuvoIngreso && !TIPOS_INGRESO.has(tc)) {
+      pushMov(i, {
+        codigo:    'MOVIMIENTO_DESPUES_DE_EGRESO',
+        severidad: 'error',
+        mensaje:   `Movimiento sobre una serie que ya había egresado y no fue devuelta.`,
+      });
+    }
+
+    // Actualizar estado
+    if (TIPOS_INGRESO.has(tc)) {
+      yaTuvoIngreso = true;
+      serieActiva   = true;
+      ultimoDepositoEsperado = m.cod_deposi;
+    } else if (TIPOS_EGRESO.has(tc)) {
+      serieActiva = false;
+      ultimoDepositoEsperado = m.cod_deposi;
+    } else {
+      ultimoDepositoEsperado = m.cod_deposi;
+    }
+
+    legacy = false;
+  }
+
+  // Regla #6: sta06 no coincide con el último movimiento — alerta global de ruta
+  const ultimo = historial[historial.length - 1];
+  if (ultimo && codDeposiActual && ultimo.cod_deposi && codDeposiActual !== ultimo.cod_deposi) {
+    alertasRuta.push({
+      codigo:    'ESTADO_ACTUAL_DESINCRONIZADO',
+      severidad: 'warning',
+      mensaje:   `El último movimiento dejó la serie en depósito ${ultimo.cod_deposi}, pero sta06 la registra en ${codDeposiActual}.`,
+    });
+  }
+
+  return { alertasRuta, alertasPorMov };
 }

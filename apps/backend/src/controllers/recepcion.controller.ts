@@ -20,6 +20,7 @@ const RecepcionSchema = z.object({
   items: z
     .array(ItemSchema)
     .min(1, 'Se requiere al menos un artículo'),
+  envases_vacios: z.array(ItemSchema).optional(),
 });
 
 // ── Handler ──────────────────────────────────────────────────────────────────
@@ -36,13 +37,39 @@ export async function postRecepcion(req: Request, res: Response): Promise<void> 
     return;
   }
 
-  // 2. Detectar series duplicadas dentro del mismo payload
-  const allSeries = parsed.data.items.flatMap(i => i.series);
-  const duplicadas = allSeries.filter((s, i) => allSeries.indexOf(s) !== i);
+  // 2. Detectar series duplicadas dentro del mismo payload (incluyendo envases vacíos)
+  const seriesRecep  = parsed.data.items.flatMap(i => i.series);
+  const seriesVacios = (parsed.data.envases_vacios ?? []).flatMap(i => i.series);
+  const allSeries    = [...seriesRecep, ...seriesVacios];
+  const duplicadas   = allSeries.filter((s, i) => allSeries.indexOf(s) !== i);
   if (duplicadas.length > 0) {
     res.status(400).json({
       error: 'Series duplicadas en el payload',
       duplicadas: [...new Set(duplicadas)],
+    });
+    return;
+  }
+
+  // 3. Validar que envases vacíos coincidan por artículo con cilindros llenos
+  const llenosByArt = new Map<string, number>();
+  for (const it of parsed.data.items) {
+    llenosByArt.set(it.cod_articu, (llenosByArt.get(it.cod_articu) ?? 0) + it.series.length);
+  }
+  const vaciosByArt = new Map<string, number>();
+  for (const it of (parsed.data.envases_vacios ?? [])) {
+    vaciosByArt.set(it.cod_articu, (vaciosByArt.get(it.cod_articu) ?? 0) + it.series.length);
+  }
+  const desbalance: { cod_articu: string; llenos: number; vacios: number }[] = [];
+  const codArticus = new Set<string>([...llenosByArt.keys(), ...vaciosByArt.keys()]);
+  for (const c of codArticus) {
+    const l = llenosByArt.get(c) ?? 0;
+    const v = vaciosByArt.get(c) ?? 0;
+    if (l !== v) desbalance.push({ cod_articu: c, llenos: l, vacios: v });
+  }
+  if (desbalance.length > 0) {
+    res.status(400).json({
+      error: 'La cantidad de envases vacíos debe coincidir con la de cilindros llenos para cada artículo',
+      desbalance,
     });
     return;
   }

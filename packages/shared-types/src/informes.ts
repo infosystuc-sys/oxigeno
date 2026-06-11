@@ -51,14 +51,31 @@ export interface ComprobanteDetalle {
 
 // ─── Trazabilidad de serie ────────────────────────────────────────────────────
 
+export type CodigoAlertaTrazabilidad =
+  | 'PRIMER_MOV_NO_INGRESO'
+  | 'DEPOSITO_ORIGEN_INCORRECTO'
+  | 'EGRESO_SIN_INGRESO'
+  | 'INGRESO_SOBRE_SERIE_ACTIVA'
+  | 'MOVIMIENTO_DESPUES_DE_EGRESO'
+  | 'ESTADO_ACTUAL_DESINCRONIZADO'
+  | 'ORDEN_AMBIGUO_MISMA_FECHA';
+
+export interface AlertaTrazabilidad {
+  codigo:    CodigoAlertaTrazabilidad;
+  severidad: 'error' | 'warning' | 'info';
+  mensaje:   string;
+}
+
 export interface MovimientoSerie {
   n_comp:           string;
   tipo_movimiento:  string;
+  tcomp_in_s?:      string;
   fecha:            string;
   entidad_cod:      string;
   entidad_nombre:   string;
   cod_deposi:       string;
   deposito_nombre:  string;
+  alertas?:         AlertaTrazabilidad[];
 }
 
 export interface RutaArticulo {
@@ -67,6 +84,7 @@ export interface RutaArticulo {
   cod_deposi_actual:      string;
   deposito_actual_nombre: string;
   historial:              MovimientoSerie[];
+  alertas?:               AlertaTrazabilidad[];
 }
 
 export interface TrazabilidadSerie {

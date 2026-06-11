@@ -13,6 +13,7 @@ export interface PostRecepcionPayload {
   nro_remito: string;
   fecha: string; // 'YYYY-MM-DD'
   items: ItemRecepcion[];
+  envases_vacios?: ItemRecepcion[];
 }
 
 export interface RecepcionResponse {

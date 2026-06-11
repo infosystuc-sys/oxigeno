@@ -23,6 +23,12 @@ const ESTADO_MOV = 'P';
 const TCOMP      = 'RE';
 const TCOMP_REM  = 'REM';
 
+// Comprobante VE: entrada de envases vacíos devueltos por el cliente ──────────
+const VE_TCOMP      = 'VE';
+const VE_TCOMP_EXT  = '005';
+const VE_PREFIX     = ' 90005';
+const VE_TALONARIO  = 5;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Consulta pública: próximo número de remito (sin lock, solo para pre-visualizar)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -396,6 +402,191 @@ async function insertarMovimientoSerie(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// VE: Helpers de comprobante de entrada de envases vacíos
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function leerSta17Ve(req: sql.Request): Promise<string> {
+  const res = await req
+    .input('ve_tal', sql.Int, VE_TALONARIO)
+    .query<{ PROXIMO: string }>(`
+      SELECT PROXIMO
+      FROM sta17 WITH (UPDLOCK)
+      WHERE TALONARIO = @ve_tal
+    `);
+
+  if (res.recordset.length === 0) {
+    throw new Error(`No se encontró TALONARIO=${VE_TALONARIO} en sta17`);
+  }
+  return res.recordset[0].PROXIMO;
+}
+
+async function incrementarSta17Ve(req: sql.Request): Promise<void> {
+  await req.query(`
+    UPDATE sta17
+    SET PROXIMO = RIGHT('00000000' + CAST(CAST(PROXIMO AS INT) + 1 AS VARCHAR(10)), 8)
+    WHERE TALONARIO = @ve_tal
+  `);
+}
+
+async function leerNroCompVe(req: sql.Request): Promise<string> {
+  const res = await req
+    .input('ve_tc_tipo', sql.VarChar(2), VE_TCOMP)
+    .query<{ PROXIMO: number }>(`
+      SELECT ISNULL(MAX(CAST(NCOMP_IN_S AS INT)), 0) + 1 AS PROXIMO
+      FROM sta14 WITH (UPDLOCK, HOLDLOCK)
+      WHERE TCOMP_IN_S = @ve_tc_tipo
+    `);
+  return String(res.recordset[0].PROXIMO).padStart(8, '0');
+}
+
+async function insertarEncabezadoVe(
+  req:        sql.Request,
+  nroComp:    string,
+  nComp:      string,
+  fecha:      string,
+  codClient:  string,
+): Promise<number> {
+  const now         = new Date();
+  const horaIngreso = parseInt(
+    String(now.getHours()).padStart(2, '0') +
+    String(now.getMinutes()).padStart(2, '0') +
+    String(now.getSeconds()).padStart(2, '0'),
+    10
+  );
+
+  req.input('ve_h_tcomp',      sql.VarChar(2),    VE_TCOMP);
+  req.input('ve_h_tcomp_ex',   sql.VarChar(3),    VE_TCOMP_EXT);
+  req.input('ve_h_ncomp_in_s', sql.VarChar(8),    nroComp);
+  req.input('ve_h_ncomp',      sql.VarChar(14),   nComp);
+  req.input('ve_h_fecha',      sql.Date,          new Date(fecha));
+  req.input('ve_h_fecha_ing',  sql.DateTime,      now);
+  req.input('ve_h_pro_cl',     sql.VarChar(6),    codClient);
+  req.input('ve_h_observacio', sql.VarChar(40),   codClient);
+  req.input('ve_h_remito',     sql.VarChar(14),   '');
+  req.input('ve_h_estado',     sql.VarChar(1),    '');
+  req.input('ve_h_deposi',     sql.VarChar(2),    '');
+  req.input('ve_h_cotiz',      sql.Decimal(18,4), 1);
+  req.input('ve_h_filler',     sql.VarChar(10),   'PEND.SWD');
+  req.input('ve_h_mon_cte',    sql.Bit,           1);
+  req.input('ve_h_motivo',     sql.VarChar(1),    '');
+  req.input('ve_h_talonario',  sql.Int,           VE_TALONARIO);
+  req.input('ve_h_usuario',    sql.VarChar(20),   'SUPERVISOR');
+  req.input('ve_h_hora',       sql.Int,           horaIngreso);
+  req.input('ve_h_usr_ing',    sql.VarChar(20),   'SUPERVISOR');
+  req.input('ve_h_terminal',   sql.VarChar(20),   'APLICACION');
+
+  const result = await req.query<{ ID_STA14: number }>(`
+    DECLARE @tmpVe TABLE (ID_STA14 INT);
+    INSERT INTO sta14 (
+      TCOMP_IN_S,  T_COMP,       NCOMP_IN_S,
+      N_COMP,      FECHA_MOV,    FECHA_INGRESO,
+      COD_PRO_CL,  N_REMITO,     ESTADO_MOV,
+      COD_DEPOSI,  NRO_SUCURS,   COTIZ,
+      FILLER,      MON_CTE,      MOTIVO_REM,
+      TALONARIO,   USUARIO,      HORA_INGRESO,
+      USUARIO_INGRESO,           TERMINAL_INGRESO,
+      OBSERVACIO
+    )
+    OUTPUT INSERTED.ID_STA14 INTO @tmpVe
+    VALUES (
+      @ve_h_tcomp,    @ve_h_tcomp_ex,  @ve_h_ncomp_in_s,
+      @ve_h_ncomp,    @ve_h_fecha,     @ve_h_fecha_ing,
+      @ve_h_pro_cl,   @ve_h_remito,    @ve_h_estado,
+      @ve_h_deposi,   0,               @ve_h_cotiz,
+      @ve_h_filler,   @ve_h_mon_cte,   @ve_h_motivo,
+      @ve_h_talonario, @ve_h_usuario,  @ve_h_hora,
+      @ve_h_usr_ing,                   @ve_h_terminal,
+      @ve_h_observacio
+    );
+    SELECT ID_STA14 FROM @tmpVe;
+  `);
+
+  return result.recordset[0].ID_STA14;
+}
+
+async function insertarRenglonVe(
+  req:            sql.Request,
+  nroComp:        string,
+  nroRenglon:     number,
+  codArticu:      string,
+  tubos:          number,
+  idSta14:        number,
+  fechaMov:       string,
+  sta11:          Sta11Data,
+  idMedidaCompra: number,
+): Promise<void> {
+  const s         = `_ver${nroRenglon}`;
+  const cantKilos = tubos * sta11.EQUIVALENCIA_STOCK_2;
+
+  req.input(`r_ncomp${s}`,     sql.VarChar(8),     nroComp);
+  req.input(`r_rengl${s}`,     sql.Int,            nroRenglon);
+  req.input(`r_articu${s}`,    sql.VarChar(15),    codArticu);
+  req.input(`r_fecha${s}`,     sql.Date,           new Date(fechaMov));
+  req.input(`r_cant${s}`,      sql.Decimal(18, 4), cantKilos);
+  req.input(`r_cant2${s}`,     sql.Decimal(18, 4), tubos);
+  req.input(`r_cantpend${s}`,  sql.Decimal(18, 4), cantKilos);
+  req.input(`r_cantpend2${s}`, sql.Decimal(18, 4), tubos);
+  req.input(`r_equi${s}`,      sql.Decimal(18, 4), 1);
+  req.input(`r_canequiv${s}`,  sql.Decimal(18, 4), 1);
+  req.input(`r_idmed${s}`,     sql.Int,            sta11.ID_MEDIDA_STOCK);
+  req.input(`r_idmed2${s}`,    sql.Int,            sta11.ID_MEDIDA_STOCK_2);
+  req.input(`r_idmedv${s}`,    sql.Int,            sta11.ID_MEDIDA_VENTAS);
+  req.input(`r_idmedc${s}`,    sql.Int,            idMedidaCompra);
+  req.input(`r_idsta11${s}`,   sql.Int,            sta11.ID_STA11);
+  req.input(`r_idsta14${s}`,   sql.Int,            idSta14);
+
+  await req.query(`
+    INSERT INTO sta20 (
+      TCOMP_IN_S,  NCOMP_IN_S,       N_RENGL_S,
+      COD_ARTICU,  FECHA_MOV,
+      CANTIDAD,    CANTIDAD_2,
+      CANT_PEND,   CANT_PEND_2,
+      EQUIVALENC,  CAN_EQUI_V,
+      COD_DEPOSI,  DEPOSI_DDE, TIPO_MOV,
+      ID_MEDIDA_STOCK,    ID_MEDIDA_STOCK_2,  ID_MEDIDA_VENTAS,
+      ID_MEDIDA_COMPRA,   UNIDAD_MEDIDA_SELECCIONADA,
+      ID_STA11,    ID_STA14
+    ) VALUES (
+      '${VE_TCOMP}', @r_ncomp${s},   @r_rengl${s},
+      @r_articu${s}, @r_fecha${s},
+      @r_cant${s},   @r_cant2${s},
+      @r_cantpend${s}, @r_cantpend2${s},
+      @r_equi${s},   @r_canequiv${s},
+      '33',          '',             'E',
+      @r_idmed${s},  @r_idmed2${s},  @r_idmedv${s},
+      @r_idmedc${s}, 'P',
+      @r_idsta11${s}, @r_idsta14${s}
+    )
+  `);
+}
+
+async function insertarMovimientoSerieVe(
+  req:        sql.Request,
+  nroComp:    string,
+  nroRenglon: number,
+  codArticu:  string,
+  nroSerie:   string,
+  idx:        number,
+): Promise<void> {
+  const s = `_vem${idx}`;
+  req.input(`m_ncomp${s}`,  sql.VarChar(8),  nroComp);
+  req.input(`m_rengl${s}`,  sql.Int,         nroRenglon);
+  req.input(`m_articu${s}`, sql.VarChar(15), codArticu);
+  req.input(`m_serie${s}`,  sql.VarChar(30), nroSerie);
+  req.input(`m_deposi${s}`, sql.VarChar(2),  '');
+
+  await req.query(`
+    INSERT INTO sta07 (
+      TCOMP_IN_S, NCOMP_IN_S,   N_RENGL_S,
+      COD_ARTICU, N_SERIE,       COD_DEPOSI
+    ) VALUES (
+      '${VE_TCOMP}', @m_ncomp${s}, @m_rengl${s},
+      @m_articu${s}, @m_serie${s}, @m_deposi${s}
+    )
+  `);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Función pública: guardar
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -404,16 +595,23 @@ export async function guardarRemitoCliente(
 ): Promise<RemitoClienteResponse> {
 
   // ── 1. Consultar ID_GVA14, STA11 y STA_ARTICULO_UNIDAD_COMPRA (fuera de la tx)
+  // Incluye artículos de items y de envases vacíos
   const idGva14 = await consultarIdGva14(payload.cod_client);
 
   const sta11Map        = new Map<string, Sta11Data>();
   const unidadCompraMap = new Map<string, number>();
 
-  for (const item of payload.items) {
-    const sta11  = await consultarSta11(item.cod_articu);
-    sta11Map.set(item.cod_articu, sta11);
+  const vacios       = payload.envases_vacios ?? [];
+  const codArticulos = new Set<string>([
+    ...payload.items.map(i => i.cod_articu),
+    ...vacios.map(i => i.cod_articu),
+  ]);
+
+  for (const cod of codArticulos) {
+    const sta11  = await consultarSta11(cod);
+    sta11Map.set(cod, sta11);
     const compra = await consultarUnidadCompra(sta11.ID_STA11);
-    unidadCompraMap.set(item.cod_articu, compra.ID_MEDIDA_COMPRA);
+    unidadCompraMap.set(cod, compra.ID_MEDIDA_COMPRA);
   }
 
   const pool        = await getPool();
@@ -458,7 +656,38 @@ export async function guardarRemitoCliente(
     // ── 7. Incrementar RIV_PROXIMO ────────────────────────────────────────
     await incrementarRivProximo(req);
 
-    // ── 8. Confirmar ──────────────────────────────────────────────────────
+    // ── 8. Comprobante VE de envases vacíos devueltos (si hay) ────────────
+    if (vacios.length > 0) {
+      const veProximoSta17 = await leerSta17Ve(req);
+      const veProxStr      = String(veProximoSta17).padStart(8, '0');
+      const veNComp        = VE_PREFIX + '00000' + veProxStr.slice(-3);   // 6 + 5 + 3 = 14 chars
+      const veNroComp      = await leerNroCompVe(req);
+      const veIdSta14      = await insertarEncabezadoVe(req, veNroComp, veNComp, payload.fecha, payload.cod_client);
+
+      let veSerieIdx = 0;
+      for (let r = 0; r < vacios.length; r++) {
+        const item           = vacios[r];
+        const nroRenglon     = r + 1;
+        const sta11          = sta11Map.get(item.cod_articu)!;
+        const idMedidaCompra = unidadCompraMap.get(item.cod_articu)!;
+        const tubos          = item.series.length;
+
+        await insertarRenglonVe(
+          req, veNroComp, nroRenglon, item.cod_articu,
+          tubos, veIdSta14, payload.fecha, sta11, idMedidaCompra,
+        );
+
+        for (const nroSerie of item.series) {
+          // sta06 NO se actualiza: la serie queda como estaba según especificación
+          await insertarMovimientoSerieVe(req, veNroComp, nroRenglon, item.cod_articu, nroSerie, veSerieIdx);
+          veSerieIdx++;
+        }
+      }
+
+      await incrementarSta17Ve(req);
+    }
+
+    // ── 9. Confirmar ──────────────────────────────────────────────────────
     await transaction.commit();
 
     return {

@@ -556,7 +556,20 @@ function TabTrazabilidad() {
           </div>
 
           {/* Una card por cada artículo/ruta */}
-          {data.rutas.map(ruta => (
+          {data.rutas.map(ruta => {
+            // Agregar alertas por movimiento al total de la ruta para decidir el banner
+            const todasAlertas = [
+              ...(ruta.alertas ?? []),
+              ...ruta.historial.flatMap(m => m.alertas ?? []),
+            ];
+            const hayError   = todasAlertas.some(a => a.severidad === 'error');
+            const hayWarning = todasAlertas.some(a => a.severidad === 'warning');
+            const bannerCls  = hayError
+              ? 'bg-red-50 border-red-300 text-red-800'
+              : hayWarning
+                ? 'bg-amber-50 border-amber-300 text-amber-800'
+                : 'bg-gray-50 border-gray-200 text-gray-700';
+            return (
             <div key={ruta.cod_articu} className="space-y-3">
               {/* Artículo + ubicación actual */}
               <div className="bg-white rounded-2xl shadow p-6">
@@ -591,6 +604,35 @@ function TabTrazabilidad() {
                 </div>
               </div>
 
+              {/* Banner de alertas (si hay) */}
+              {todasAlertas.length > 0 && (
+                <div className={`rounded-2xl border px-5 py-4 space-y-2 ${bannerCls}`}>
+                  <div className="flex items-center gap-2">
+                    <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <p className="font-bold text-sm uppercase tracking-wide">
+                      {hayError
+                        ? `Trazabilidad inconsistente · ${todasAlertas.filter(a => a.severidad === 'error').length} error(es)`
+                        : hayWarning
+                          ? `Revisar trazabilidad · ${todasAlertas.filter(a => a.severidad === 'warning').length} advertencia(s)`
+                          : 'Información de trazabilidad'}
+                    </p>
+                  </div>
+                  <ul className="text-xs space-y-1 ml-7 list-disc">
+                    {todasAlertas.map((a, idx) => (
+                      <li key={idx}>
+                        <span className="font-mono text-[10px] bg-white/60 px-1 py-0.5 rounded mr-1">
+                          {a.codigo}
+                        </span>
+                        {a.mensaje}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {/* Historial de este artículo */}
               <div className="bg-white rounded-2xl shadow overflow-hidden">
                 <div className="bg-gray-50 border-b border-gray-200 px-6 py-4">
@@ -606,11 +648,19 @@ function TabTrazabilidad() {
                 ) : (
                   <div className="p-5">
                     <ol className="relative border-l-2 border-gray-200 ml-3 space-y-0">
-                      {ruta.historial.map((mov, i) => (
+                      {ruta.historial.map((mov, i) => {
+                        const movAlertas = mov.alertas ?? [];
+                        const movError   = movAlertas.some(a => a.severidad === 'error');
+                        const movWarning = !movError && movAlertas.some(a => a.severidad === 'warning');
+                        return (
                         <li key={i} className="pl-6 pb-6 relative">
                           <div className={[
                             'absolute -left-[9px] top-1 w-4 h-4 rounded-full border-2 border-white',
-                            TIPO_COLORS[mov.tipo_movimiento] ?? 'bg-gray-400',
+                            movError
+                              ? 'bg-red-600 ring-2 ring-red-200'
+                              : movWarning
+                                ? 'bg-amber-500 ring-2 ring-amber-200'
+                                : TIPO_COLORS[mov.tipo_movimiento] ?? 'bg-gray-400',
                           ].join(' ')} />
 
                           <div className="flex items-start gap-4">
@@ -622,6 +672,19 @@ function TabTrazabilidad() {
                                 ].join(' ')}>
                                   {TIPO_LABELS[mov.tipo_movimiento] ?? mov.tipo_movimiento}
                                 </span>
+                                {movAlertas.length > 0 && (
+                                  <span
+                                    title={movAlertas.map(a => `[${a.codigo}] ${a.mensaje}`).join('\n')}
+                                    className={[
+                                      'text-[10px] font-bold px-1.5 py-0.5 rounded inline-flex items-center gap-1',
+                                      movError
+                                        ? 'bg-red-100 text-red-700'
+                                        : 'bg-amber-100 text-amber-700',
+                                    ].join(' ')}
+                                  >
+                                    ⚠ {movAlertas.length === 1 ? '1 alerta' : `${movAlertas.length} alertas`}
+                                  </span>
+                                )}
                                 <span className="font-mono text-xs text-gray-500">
                                   {mov.fecha}
                                 </span>
@@ -654,13 +717,15 @@ function TabTrazabilidad() {
                             )}
                           </div>
                         </li>
-                      ))}
+                        );
+                      })}
                     </ol>
                   </div>
                 )}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
